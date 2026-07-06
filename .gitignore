@@ -1,0 +1,31 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+.claude/
+
+# Local environment and secrets
+.env
+.env.*
+*.local.php
+
+# Dependency/build folders
+vendor/
+node_modules/
+dist/
+build/
+
+# Runtime/generated files
+*.log
+database/outbox.log
+backups/
+*.sql.gz
+*.zip
+
+# User/private uploads; keep seeded/demo public uploads in source
+uploads/payments/
+uploads/ui/
+uploads/ar-models/

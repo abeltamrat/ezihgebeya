@@ -1,0 +1,16 @@
+RewriteEngine On
+RewriteBase /ezihgebeya/
+
+# pass the Authorization header through to PHP (needed for /api bearer tokens)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# block PHP execution in uploads
+RewriteRule ^uploads/.*\.(php|phtml|php\d)$ - [F]
+
+# serve existing files/dirs directly (assets, uploads, manifest, sw)
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+RewriteRule ^ index.php [L]

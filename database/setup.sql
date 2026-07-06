@@ -1,0 +1,303 @@
+-- ArkoMarket MVP schema (from Development Documentation v1.0, section 17)
+CREATE DATABASE IF NOT EXISTS arkomarket CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE arkomarket;
+
+DROP TABLE IF EXISTS favorites, reports, reviews, inquiries, video_posts, supplies, services, product_media, products, categories, businesses, users;
+
+CREATE TABLE users (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(150) NOT NULL,
+    phone VARCHAR(30) UNIQUE,
+    email VARCHAR(150) UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    account_type ENUM('customer','seller','manufacturer','importer','service_provider','supplier','admin','super_admin') NOT NULL DEFAULT 'customer',
+    status ENUM('pending','active','suspended','banned','deleted') NOT NULL DEFAULT 'active',
+    phone_verified_at DATETIME NULL,
+    email_verified_at DATETIME NULL,
+    last_login_at DATETIME NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE businesses (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    business_name VARCHAR(200) NOT NULL,
+    slug VARCHAR(220) UNIQUE NOT NULL,
+    business_type ENUM('seller','manufacturer','importer','service_provider','supplier','mixed') NOT NULL,
+    description TEXT NULL,
+    phone VARCHAR(30),
+    email VARCHAR(150),
+    logo VARCHAR(255),
+    cover_image VARCHAR(255),
+    city VARCHAR(100),
+    subcity VARCHAR(100),
+    area_name VARCHAR(150),
+    address TEXT,
+    latitude DECIMAL(10,7) NULL,
+    longitude DECIMAL(10,7) NULL,
+    tin_number VARCHAR(100),
+    license_number VARCHAR(100),
+    verification_status ENUM('unverified','phone_verified','document_verified','location_verified','premium_verified') DEFAULT 'unverified',
+    rating_average DECIMAL(3,2) DEFAULT 0,
+    rating_count INT DEFAULT 0,
+    status ENUM('pending','active','suspended','rejected','deleted') DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE categories (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    parent_id BIGINT UNSIGNED NULL,
+    name VARCHAR(150) NOT NULL,
+    slug VARCHAR(180) UNIQUE NOT NULL,
+    type ENUM('product','service','supply','mixed') NOT NULL DEFAULT 'mixed',
+    icon VARCHAR(255),
+    status ENUM('active','inactive') DEFAULT 'active',
+    sort_order INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_id) REFERENCES categories(id)
+);
+
+CREATE TABLE products (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    business_id BIGINT UNSIGNED NOT NULL,
+    category_id BIGINT UNSIGNED NOT NULL,
+    title VARCHAR(220) NOT NULL,
+    slug VARCHAR(250) UNIQUE NOT NULL,
+    description TEXT,
+    product_type ENUM('ready_made','custom_made','imported','used','made_to_order','decor','tool','machine') DEFAULT 'ready_made',
+    condition_type ENUM('new','used','refurbished') DEFAULT 'new',
+    price DECIMAL(12,2) NULL,
+    discount_price DECIMAL(12,2) NULL,
+    currency VARCHAR(10) DEFAULT 'ETB',
+    is_negotiable BOOLEAN DEFAULT FALSE,
+    stock_quantity INT DEFAULT 0,
+    unit VARCHAR(50) DEFAULT 'piece',
+    material VARCHAR(150),
+    brand VARCHAR(150),
+    color VARCHAR(100),
+    dimensions VARCHAR(150),
+    warranty VARCHAR(150),
+    delivery_available BOOLEAN DEFAULT FALSE,
+    installation_available BOOLEAN DEFAULT FALSE,
+    customization_available BOOLEAN DEFAULT FALSE,
+    city VARCHAR(100),
+    subcity VARCHAR(100),
+    latitude DECIMAL(10,7) NULL,
+    longitude DECIMAL(10,7) NULL,
+    status ENUM('draft','pending_review','active','rejected','paused','sold_out','deleted') DEFAULT 'pending_review',
+    is_featured BOOLEAN DEFAULT FALSE,
+    is_promoted BOOLEAN DEFAULT FALSE,
+    views_count INT DEFAULT 0,
+    favorites_count INT DEFAULT 0,
+    inquiries_count INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FULLTEXT KEY ft_products (title, description),
+    FOREIGN KEY (business_id) REFERENCES businesses(id),
+    FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+CREATE TABLE product_media (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    product_id BIGINT UNSIGNED NOT NULL,
+    media_type ENUM('image','video','model_3d_glb','model_3d_usdz','thumbnail') DEFAULT 'image',
+    file_url VARCHAR(255) NOT NULL,
+    sort_order INT DEFAULT 0,
+    is_primary BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE services (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    business_id BIGINT UNSIGNED NOT NULL,
+    category_id BIGINT UNSIGNED NOT NULL,
+    title VARCHAR(220) NOT NULL,
+    slug VARCHAR(250) UNIQUE NOT NULL,
+    description TEXT,
+    experience_years INT DEFAULT 0,
+    price_type ENUM('fixed','starting_from','per_square_meter','per_day','per_project','quote_required') DEFAULT 'quote_required',
+    starting_price DECIMAL(12,2) NULL,
+    image VARCHAR(255) NULL,
+    city VARCHAR(100),
+    subcity VARCHAR(100),
+    status ENUM('draft','pending_review','active','rejected','paused','deleted') DEFAULT 'pending_review',
+    is_featured BOOLEAN DEFAULT FALSE,
+    is_promoted BOOLEAN DEFAULT FALSE,
+    views_count INT DEFAULT 0,
+    inquiries_count INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FULLTEXT KEY ft_services (title, description),
+    FOREIGN KEY (business_id) REFERENCES businesses(id),
+    FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+CREATE TABLE supplies (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    business_id BIGINT UNSIGNED NOT NULL,
+    category_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(220) NOT NULL,
+    slug VARCHAR(250) UNIQUE NOT NULL,
+    description TEXT,
+    brand VARCHAR(150),
+    grade VARCHAR(100),
+    size VARCHAR(100),
+    thickness VARCHAR(100),
+    unit_of_measurement VARCHAR(50) DEFAULT 'piece',
+    price_per_unit DECIMAL(12,2) NULL,
+    bulk_price DECIMAL(12,2) NULL,
+    minimum_order_quantity DECIMAL(12,2) DEFAULT 1,
+    stock_quantity DECIMAL(12,2) DEFAULT 0,
+    delivery_available BOOLEAN DEFAULT FALSE,
+    image VARCHAR(255) NULL,
+    city VARCHAR(100),
+    subcity VARCHAR(100),
+    status ENUM('draft','pending_review','active','rejected','paused','out_of_stock','deleted') DEFAULT 'pending_review',
+    is_featured BOOLEAN DEFAULT FALSE,
+    is_promoted BOOLEAN DEFAULT FALSE,
+    views_count INT DEFAULT 0,
+    inquiries_count INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FULLTEXT KEY ft_supplies (name, description),
+    FOREIGN KEY (business_id) REFERENCES businesses(id),
+    FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+CREATE TABLE video_posts (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    business_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    platform ENUM('tiktok','youtube') NOT NULL,
+    original_url TEXT NOT NULL,
+    video_id VARCHAR(150) NULL,
+    embed_url TEXT NULL,
+    title VARCHAR(255) NULL,
+    description TEXT NULL,
+    linked_type ENUM('product','service','supply','business','portfolio','promotion') NOT NULL,
+    linked_id BIGINT UNSIGNED NULL,
+    cta_label VARCHAR(100) DEFAULT 'Check Now',
+    city VARCHAR(100),
+    subcity VARCHAR(100),
+    status ENUM('pending','approved','rejected','disabled','deleted') DEFAULT 'pending',
+    is_featured BOOLEAN DEFAULT FALSE,
+    is_promoted BOOLEAN DEFAULT FALSE,
+    views_count INT DEFAULT 0,
+    cta_clicks_count INT DEFAULT 0,
+    reports_count INT DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (business_id) REFERENCES businesses(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE inquiries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id BIGINT UNSIGNED NULL,
+    business_id BIGINT UNSIGNED NOT NULL,
+    listing_type ENUM('product','service','supply','business','video') NOT NULL,
+    listing_id BIGINT UNSIGNED NULL,
+    listing_title VARCHAR(255) NULL,
+    inquiry_type ENUM('product_inquiry','service_quote_request','supply_order_request','custom_order_request','bulk_purchase_request','delivery_request','installation_request') NOT NULL DEFAULT 'product_inquiry',
+    name VARCHAR(150) NULL,
+    message TEXT,
+    phone VARCHAR(30),
+    preferred_contact_method ENUM('phone','chat','telegram','email','whatsapp') DEFAULT 'phone',
+    source ENUM('product_detail','video_feed','search_result','business_profile','featured_ad','telegram_mini_app','pwa') DEFAULT 'product_detail',
+    status ENUM('new','seen','responded','negotiating','converted','closed','spam') DEFAULT 'new',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES users(id),
+    FOREIGN KEY (business_id) REFERENCES businesses(id)
+);
+
+CREATE TABLE reviews (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    reviewer_id BIGINT UNSIGNED NOT NULL,
+    business_id BIGINT UNSIGNED NOT NULL,
+    listing_type ENUM('product','service','supply','business') NOT NULL,
+    listing_id BIGINT UNSIGNED NULL,
+    rating TINYINT NOT NULL,
+    title VARCHAR(150),
+    comment TEXT,
+    is_verified_purchase BOOLEAN DEFAULT FALSE,
+    status ENUM('pending','approved','rejected','hidden','reported') DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (reviewer_id) REFERENCES users(id),
+    FOREIGN KEY (business_id) REFERENCES businesses(id)
+);
+
+CREATE TABLE reports (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    reporter_id BIGINT UNSIGNED NULL,
+    reported_type ENUM('product','service','supply','business','video','review','user') NOT NULL,
+    reported_id BIGINT UNSIGNED NOT NULL,
+    reason VARCHAR(150) NOT NULL,
+    description TEXT,
+    status ENUM('open','reviewing','resolved','dismissed') DEFAULT 'open',
+    admin_note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (reporter_id) REFERENCES users(id)
+);
+
+CREATE TABLE favorites (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    product_id BIGINT UNSIGNED NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_fav (user_id, product_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE site_settings (
+    setting_key VARCHAR(100) PRIMARY KEY,
+    setting_value MEDIUMTEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Categories seed
+INSERT INTO categories (name, slug, type, icon, sort_order) VALUES
+('Sofa','sofa','product','🛋️',1),
+('Bed','bed','product','🛏️',2),
+('Dining Table','dining-table','product','🍽️',3),
+('Chair','chair','product','🪑',4),
+('Office Furniture','office-furniture','product','🗄️',5),
+('Kitchen Cabinet','kitchen-cabinet','product','🚪',6),
+('Wardrobe','wardrobe','product','🚪',7),
+('TV Stand','tv-stand','product','📺',8),
+('Door','door','product','🚪',9),
+('Wall Panel','wall-panel','product','🧱',10),
+('Decor','decor','product','🖼️',11),
+('Lighting','lighting','product','💡',12),
+('Curtain','curtain','product','🪟',13),
+('Interior Design','interior-design','service','🎨',20),
+('Gypsum Work','gypsum-work','service','🏗️',21),
+('Painting','painting','service','🖌️',22),
+('Electrical Work','electrical-work','service','⚡',23),
+('Plumbing','plumbing','service','🔧',24),
+('Flooring','flooring','service','🪵',25),
+('Kitchen Cabinet Installation','kitchen-cabinet-installation','service','🔨',26),
+('Furniture Installation','furniture-installation','service','🛠️',27),
+('Renovation','renovation','service','🏠',28),
+('Wood Work','wood-work','service','🪚',29),
+('Metal Work','metal-work','service','⚙️',30),
+('Aluminum Work','aluminum-work','service','🪟',31),
+('Glass Work','glass-work','service','🔷',32),
+('MDF Board','mdf-board','supply','📦',40),
+('Plywood','plywood','supply','🪵',41),
+('Solid Wood','solid-wood','supply','🌳',42),
+('Veneer','veneer','supply','📄',43),
+('Hardware & Accessories','hardware-accessories','supply','🔩',44),
+('Paint & Finishing','paint-finishing','supply','🎨',45),
+('Foam','foam','supply','🧽',46),
+('Fabric & Leather','fabric-leather','supply','🧵',47),
+('Tools','tools','supply','🧰',48),
+('Machinery','machinery','supply','🏭',49);

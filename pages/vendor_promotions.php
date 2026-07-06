@@ -21,12 +21,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $weeks = max(1, min(8, (int)($_POST['weeks'] ?? 1)));
     $target = $_POST['target'] ?? ''; // "type:id"
     $ref = trim($_POST['reference_number'] ?? '');
-    $method = array_key_exists($_POST['payment_method'] ?? '', PAYMENT_METHODS) ? $_POST['payment_method'] : 'telebirr';
+    $methods = payment_methods(false);
+    $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
 
-    if (!isset(PROMO_TYPES[$ptype])) $errors[] = 'Select a promotion type.';
+    if (!isset(promo_types()[$ptype])) $errors[] = 'Select a promotion type.';
     $promotableType = null; $promotableId = null;
     if (!$errors) {
-        $kind = PROMO_TYPES[$ptype]['target'];
+        $kind = promo_types()[$ptype]['target'];
         if ($kind === 'business') { $promotableType = 'business'; $promotableId = $biz['id']; }
         else {
             [$tt, $tid] = array_pad(explode(':', $target), 2, 0);
@@ -41,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$errors && $biz['verification_status'] === 'unverified') $errors[] = 'Only verified businesses can buy promotions (§30.6). Submit your TIN/license first.';
 
     if (!$errors) {
-        $cost = PROMO_TYPES[$ptype]['price'] * $weeks;
+        $cost = promo_types()[$ptype]['price'] * $weeks;
         q("INSERT INTO promotions (business_id, promotable_type, promotable_id, promotion_type, duration_weeks, city, subcity, budget, status)
            VALUES (?,?,?,?,?,?,?,?, 'pending')",
           [$biz['id'], $promotableType, $promotableId, $ptype, $weeks, $biz['city'], $biz['subcity'], $cost]);
@@ -76,8 +77,8 @@ include __DIR__ . '/../views/layout_top.php';
       <?= csrf_field() ?>
       <label>Promotion type
         <select name="promotion_type" id="promo-type">
-          <?php foreach (PROMO_TYPES as $k => $pt): ?>
-            <option value="<?= $k ?>" data-price="<?= $pt['price'] ?>" data-target="<?= $pt['target'] ?>"><?= $pt['label'] ?> — <?= number_format($pt['price']) ?> ETB/week</option>
+          <?php foreach (promo_types() as $k => $pt): ?>
+            <option value="<?= $k ?>" data-price="<?= $pt['price'] ?>" data-target="<?= $pt['target'] ?>"><?= $pt['label'] ?> — <?= number_format($pt['price']) ?> <?= e(sys('general.currency_label', 'ETB')) ?>/week</option>
           <?php endforeach; ?>
         </select>
       </label>
@@ -89,7 +90,7 @@ include __DIR__ . '/../views/layout_top.php';
       </label>
       <label>Payment method
         <select name="payment_method">
-          <?php foreach (PAYMENT_METHODS as $k => $l): ?><option value="<?= $k ?>"><?= $l ?></option><?php endforeach; ?>
+          <?php foreach (payment_methods(false) as $k => $l): ?><option value="<?= $k ?>"><?= $l ?></option><?php endforeach; ?>
         </select>
       </label>
       <label>Transaction reference <input name="reference_number" placeholder="Payment ref number"></label>

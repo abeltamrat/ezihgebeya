@@ -82,14 +82,15 @@ if ($sort === 'nearest') {
         $orderParams[] = $loc['city'];
     }
 } elseif ($sort === 'recommended') {
-    // §8.4 Listing Score: location + keyword + verification + rating + freshness + promotion − complaints
-    $order = "((l.city = ?) * 20 + (l.subcity <=> ?) * 10"
+    // §8.4 Listing Score — weights tunable in admin → Settings → ranking
+    $W = fn(string $k) => (float)sys("ranking.$k");
+    $order = "((l.city = ?) * {$W('city')} + (l.subcity <=> ?) * {$W('subcity')}"
         . " + $ftScore"
-        . " + (b.verification_status != 'unverified') * 15"
-        . " + LEAST(10, b.rating_average * 2)"
-        . " + GREATEST(0, 10 - DATEDIFF(NOW(), l.created_at) / 5)"
-        . " + l.is_featured * 8 + l.is_promoted * 6"
-        . " - (SELECT COUNT(*) FROM reports r WHERE r.reported_type = '$type' AND r.reported_id = l.id AND r.status IN ('open','reviewing')) * 10"
+        . " + (b.verification_status != 'unverified') * {$W('verification')}"
+        . " + LEAST(10, b.rating_average * {$W('rating')})"
+        . " + GREATEST(0, {$W('freshness')} - DATEDIFF(NOW(), l.created_at) / 5)"
+        . " + l.is_featured * {$W('featured')} + l.is_promoted * {$W('promoted')}"
+        . " - (SELECT COUNT(*) FROM reports r WHERE r.reported_type = '$type' AND r.reported_id = l.id AND r.status IN ('open','reviewing')) * {$W('report_penalty')}"
         . ") DESC, l.created_at DESC";
     $orderParams[] = $loc['city'];
     $orderParams[] = $loc['subcity'];
@@ -142,7 +143,7 @@ include __DIR__ . '/../views/layout_top.php';
           <?php foreach (CITIES[$city] ?? [] as $s): ?><option <?= $subcity === $s ? 'selected' : '' ?>><?= e($s) ?></option><?php endforeach; ?>
         </select>
       </label>
-      <label>Price range (ETB)
+      <label>Price range (<?= e(sys('general.currency_label', 'ETB')) ?>)
         <div class="range-row">
           <input type="number" name="min_price" placeholder="Min" value="<?= $minPrice ?: '' ?>">
           <input type="number" name="max_price" placeholder="Max" value="<?= $maxPrice ?: '' ?>">

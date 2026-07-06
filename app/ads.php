@@ -64,6 +64,7 @@ function ad_click_url(array $ad): string { return url('ads/go/' . $ad['id']); }
  * house ad ("Advertise here") that turns unsold inventory into ad-sales leads.
  */
 function ad_slot(string $placement, array $ctx = []): string {
+    if (!feature_enabled('ads')) return ''; // admin → Settings → Features
     $ad = ad_pick($placement, $ctx);
     if (!$ad) {
         return in_array($placement, ['home_hero', 'home_inline', 'browse_top'], true)

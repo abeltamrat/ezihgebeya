@@ -27,7 +27,7 @@ if ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ----- plan limit (§26.2) -----
 if ($action === 'new' && !can_add_listing($biz['id'])) {
-    flash('Listing limit reached for your ' . PLANS[current_plan($biz['id'])]['label'] . ' plan. Upgrade to add more.', 'error');
+    flash('Listing limit reached for your ' . plans()[current_plan($biz['id'])]['label'] . ' plan. Upgrade to add more.', 'error');
     redirect('vendor/subscription');
 }
 
@@ -69,19 +69,20 @@ if (in_array($action, ['new', 'edit'], true) && $_SERVER['REQUEST_METHOD'] === '
             $cols = "category_id=?, name=?, description=?, brand=?, grade=?, size=?, thickness=?, unit_of_measurement=?, price_per_unit=?, bulk_price=?, minimum_order_quantity=?, stock_quantity=?, delivery_available=?, city=?, subcity=?";
         }
 
+        $newStatus = sys('moderation.auto_approve_listings') ? 'active' : 'pending_review'; // §16.3 policy switch
         if ($item) {
-            q("UPDATE `$table` SET $cols, status = 'pending_review' WHERE id = ?", [...$data, $item['id']]);
+            q("UPDATE `$table` SET $cols, status = ? WHERE id = ?", [...$data, $newStatus, $item['id']]);
             $newId = $item['id'];
-            flash('Listing updated — re-submitted for review.');
+            flash($newStatus === 'active' ? 'Listing updated and live.' : 'Listing updated — re-submitted for review.');
         } else {
-            q("INSERT INTO `$table` SET business_id = " . (int)$biz['id'] . ", slug = " . db()->quote($slug) . ", $cols, status = 'pending_review'", $data);
+            q("INSERT INTO `$table` SET business_id = " . (int)$biz['id'] . ", slug = " . db()->quote($slug) . ", $cols, status = " . db()->quote($newStatus), $data);
             $newId = (int)db()->lastInsertId();
-            flash('Listing created! It will be public after admin approval.');
+            flash($newStatus === 'active' ? 'Listing created and live!' : 'Listing created! It will be public after admin approval.');
         }
 
-        // images
+        // images (max per listing set in admin → Settings → Limits)
         if ($ltype === 'product') {
-            foreach (array_slice($_FILES['images']['name'] ?? [], 0, 6, true) as $k => $n) {
+            foreach (array_slice($_FILES['images']['name'] ?? [], 0, (int)sys('limits.max_images_per_listing', 6), true) as $k => $n) {
                 if (!$n) continue;
                 $f = ['name' => $n, 'type' => $_FILES['images']['type'][$k], 'tmp_name' => $_FILES['images']['tmp_name'][$k],
                       'error' => $_FILES['images']['error'][$k], 'size' => $_FILES['images']['size'][$k]];
@@ -91,8 +92,8 @@ if (in_array($action, ['new', 'edit'], true) && $_SERVER['REQUEST_METHOD'] === '
                     q("INSERT INTO product_media (product_id, file_url, is_primary) VALUES (?,?,?)", [$newId, $path, $isFirst ? 1 : 0]);
                 }
             }
-            // AR 3D models (§7) — premium plan only
-            if (current_plan($biz['id']) === 'premium') {
+            // AR 3D models (§7) — premium plan only, and only while the AR module is enabled
+            if (feature_enabled('ar') && current_plan($biz['id']) === 'premium') {
                 foreach (['model_glb' => ['glb', 'model_3d_glb'], 'model_usdz' => ['usdz', 'model_3d_usdz']] as $field => [$ext, $mtype]) {
                     $mp = upload_model($_FILES[$field] ?? [], $ext);
                     if ($mp) {
@@ -200,8 +201,8 @@ include __DIR__ . '/../views/layout_top.php';
           <label class="check"><input type="checkbox" name="installation_available" <?= !empty($_POST['installation_available'] ?? $item['installation_available'] ?? 0) ? 'checked' : '' ?>> Installation</label>
           <label class="check"><input type="checkbox" name="customization_available" <?= !empty($_POST['customization_available'] ?? $item['customization_available'] ?? 0) ? 'checked' : '' ?>> Customization</label>
         </div>
-        <label class="span2">Images (up to 6) <input type="file" name="images[]" accept="image/*" multiple></label>
-        <?php if (current_plan($biz['id']) === 'premium'): ?>
+        <label class="span2">Images (up to <?= (int)sys('limits.max_images_per_listing', 6) ?>) <input type="file" name="images[]" accept="image/*" multiple></label>
+        <?php if (feature_enabled('ar') && current_plan($biz['id']) === 'premium'): ?>
           <label>AR model — .glb (Android/web) <input type="file" name="model_glb" accept=".glb"></label>
           <label>AR model — .usdz (iOS) <input type="file" name="model_usdz" accept=".usdz"></label>
           <p class="muted small span2">Only <strong>.glb</strong> and <strong>.usdz</strong> are supported — plain <strong>.obj</strong> files won't preview in AR.

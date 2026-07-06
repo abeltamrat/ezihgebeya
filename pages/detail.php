@@ -89,7 +89,7 @@ include __DIR__ . '/../views/layout_top.php';
       <?php endif; ?>
     </div>
 
-    <?php if ($glb): ?>
+    <?php if ($glb && feature_enabled('ar')): ?>
     <div class="panel">
       <h3>🪄 3D & AR Preview <span class="badge badge-featured">AR</span></h3>
       <script type="module" src="https://unpkg.com/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
@@ -156,7 +156,7 @@ include __DIR__ . '/../views/layout_top.php';
       </div>
     <?php endforeach; ?>
 
-    <?php if ($u): ?>
+    <?php if ($u && feature_enabled('reviews')): ?>
     <form class="panel" method="post" action="<?= url('review') ?>">
       <?= csrf_field() ?>
       <input type="hidden" name="listing_type" value="<?= $type ?>">
@@ -172,7 +172,7 @@ include __DIR__ . '/../views/layout_top.php';
       <button class="btn btn-primary">Submit review</button>
       <p class="muted small">Reviews appear after moderation.</p>
     </form>
-    <?php else: ?>
+    <?php elseif (feature_enabled('reviews')): ?>
       <p class="muted"><a href="<?= url('login') ?>">Log in</a> to write a review.</p>
     <?php endif; ?>
   </div>
@@ -189,8 +189,8 @@ include __DIR__ . '/../views/layout_top.php';
       <a class="btn btn-ghost btn-block" href="<?= url('businesses/' . e($item['b_slug'])) ?>">Visit shop →</a>
     </div>
 
-    <?php if (($type === 'product' && $item['price'] > 0 && $item['status'] === 'active')
-           || ($type === 'supply' && $item['price_per_unit'] > 0)): ?>
+    <?php if (feature_enabled('cart') && (($type === 'product' && $item['price'] > 0 && $item['status'] === 'active')
+           || ($type === 'supply' && $item['price_per_unit'] > 0))): ?>
     <div class="panel">
       <h3>🛒 Order online</h3>
       <form method="post" action="<?= url('cart') ?>" class="form-inline">
@@ -208,6 +208,7 @@ include __DIR__ . '/../views/layout_top.php';
     </div>
     <?php endif; ?>
 
+    <?php if (feature_enabled('inquiries')): ?>
     <div class="panel">
       <h3><?= $type === 'service' ? 'Request a quote' : 'Send inquiry' ?></h3>
       <form method="post" action="<?= url('inquiry') ?>">
@@ -230,6 +231,7 @@ include __DIR__ . '/../views/layout_top.php';
         <button class="btn btn-primary btn-block"><?= $type === 'service' ? 'Request Quote' : 'Send Inquiry' ?></button>
       </form>
     </div>
+    <?php endif; /* inquiries feature */ ?>
 
     <?php if ($type === 'product' && $u): ?>
     <form method="post" action="<?= url('favorite') ?>">

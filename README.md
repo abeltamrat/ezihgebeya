@@ -86,6 +86,25 @@ database/            setup.sql (schema §17) + seed.php (demo data)
 - **Reviews (§13)**: photos on reviews, verified-purchase badge wired to completed orders, one public vendor reply per review (`/vendor/reviews`), seller response rate on business profiles.
 - **Uploads (§22.3)**: images are downscaled to 1600px, recompressed, and get a 400px `.thumb.jpg`.
 
+## ⚙️ System Settings control center (2026-07-06)
+
+Admin → **System Settings** (super admin) makes every system part editable live, stored
+in `site_settings` (`app/settings.php`, read with `sys('group.key')`; config.php values
+are the factory defaults):
+
+- **General & identity**: site name, tagline, currency label, contact phone/email, default city, registration open/closed, **maintenance mode** (503 for everyone except admins, custom message).
+- **Feature modules**: video feed, cart/checkout/orders, promotions, subscriptions, reviews, inquiries, AR preview, ad engine, REST API, location auto-detection — off = hidden from nav and routes blocked.
+- **Moderation policy (§16.3)**: auto-approve vs manual review per content type (businesses / listings / videos / reviews).
+- **Limits**: max images per listing, inquiry rate limit + window, video feed size, AR model size.
+- **Plans & promotions**: price + listing/video limits per plan; price per promotion type.
+- **Payments (§12)**: enable/disable each method, payment instructions shown at checkout and upgrade forms, commission % (surfaces "commission owed" in Analytics).
+- **Ranking weights (§6.5/§8.4)**: every weight in the listing and video-feed scoring formulas.
+- **Auth & security (§22.1)**: OTP required on/off, lockout attempts + window, session timeout, min password length.
+- **Notifications**: SMS mirroring on/off, SMS gateway URL (`{phone}`/`{message}` placeholders), email from-address.
+- **SEO**: default meta description + a head snippet injected on every page (analytics tags).
+
+"Reset to defaults" restores the factory configuration. All admin saves are audit-logged.
+
 ## Still not built (future scale phase, §28 Phase 6)
 
 Automated payment gateway integration (Telebirr API/Chapa), escrow, native video

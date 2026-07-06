@@ -83,7 +83,7 @@ include __DIR__ . '/../views/layout_top.php';
     </div>
   <?php endforeach; ?>
 
-  <?php if ($u): ?>
+  <?php if ($u && feature_enabled('reviews')): ?>
   <form class="panel" method="post" action="<?= url('review') ?>" enctype="multipart/form-data" style="max-width:480px">
     <?= csrf_field() ?>
     <input type="hidden" name="listing_type" value="business">

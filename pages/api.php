@@ -76,7 +76,9 @@ if ($r0 === 'register' && $method === 'POST') {
     $name = trim($body['full_name'] ?? '');
     $phone = preg_replace('/[^\d+]/', '', $body['phone'] ?? '');
     $pass = $body['password'] ?? '';
-    if (mb_strlen($name) < 2 || strlen($phone) < 9 || strlen($pass) < 6) api_error('full_name, phone and password (6+) required.');
+    if (!sys('general.registration_open', 1)) api_error('Registrations are temporarily closed.', 403);
+    $minPass = (int)sys('auth.min_password_len', 6);
+    if (mb_strlen($name) < 2 || strlen($phone) < 9 || strlen($pass) < $minPass) api_error("full_name, phone and password ($minPass+) required.");
     if (val("SELECT COUNT(*) FROM users WHERE phone = ?", [$phone])) api_error('Phone already registered.', 409);
     q("INSERT INTO users (full_name, phone, password, account_type, status) VALUES (?,?,?, 'customer', 'active')",
       [$name, $phone, password_hash($pass, PASSWORD_BCRYPT)]);

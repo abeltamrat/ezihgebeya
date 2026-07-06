@@ -134,7 +134,13 @@ $isSuper = $u['account_type'] === 'super_admin';
       'Video views (30d)' => val("SELECT COUNT(*) FROM video_events WHERE event_type='view' AND created_at > NOW() - INTERVAL 30 DAY"),
       'Video CTA clicks (30d)' => val("SELECT COUNT(*) FROM video_events WHERE event_type='cta_click' AND created_at > NOW() - INTERVAL 30 DAY"),
       'Open reports' => val("SELECT COUNT(*) FROM reports WHERE status='open'"),
-  ]; ?>
+  ];
+  $commissionPct = (float)sys('payments.commission_percent', 0);
+  if ($commissionPct > 0) {
+      $completedValue = (float)val("SELECT COALESCE(SUM(total),0) FROM orders WHERE status IN ('delivered','completed') AND created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')");
+      $cards["Commission owed ({$commissionPct}% of completed orders, this month)"] = money($completedValue * $commissionPct / 100) ?: '0 ' . sys('general.currency_label', 'ETB');
+  }
+  ?>
   <div class="stat-grid">
     <?php foreach ($cards as $label => $n): ?>
       <div class="stat-card"><div class="stat-num"><?= is_numeric($n) ? number_format((float)$n) : $n ?></div><div class="stat-label"><?= $label ?></div></div>

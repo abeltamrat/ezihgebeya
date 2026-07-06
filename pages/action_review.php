@@ -29,11 +29,17 @@ if (val("SELECT COUNT(*) FROM reviews WHERE reviewer_id = ? AND business_id = ? 
         $path = upload_image($file, 'reviews');
         if ($path) $images[] = $path;
     }
+    $rStatus = sys('moderation.auto_approve_reviews') ? 'approved' : 'pending'; // §16.3 policy switch
     q("INSERT INTO reviews (reviewer_id, business_id, listing_type, listing_id, order_id, rating, title, comment, images, is_verified_purchase, status)
-       VALUES (?,?,?,?,?,?,?,?,?,?, 'pending')",
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)",
       [$u['id'], $bid, $type, $lid, $orderId ?: null, $rating, $title ?: null, $comment,
-       $images ? json_encode($images) : null, $orderId ? 1 : 0]);
-    flash('Thanks! Your review will appear after moderation.');
+       $images ? json_encode($images) : null, $orderId ? 1 : 0, $rStatus]);
+    if ($rStatus === 'approved') {
+        $agg = row("SELECT AVG(rating) a, COUNT(*) c FROM reviews WHERE business_id = ? AND status = 'approved'", [$bid]);
+        q("UPDATE businesses SET rating_average = ?, rating_count = ? WHERE id = ?", [round($agg['a'], 2), $agg['c'], $bid]);
+        notify_business($bid, 'review_received', 'You received a new ' . $rating . '★ review', 'vendor/reviews');
+    }
+    flash($rStatus === 'approved' ? 'Thanks! Your review is live.' : 'Thanks! Your review will appear after moderation.');
 }
 $ref = $_SERVER['HTTP_REFERER'] ?? '';
 redirect($ref ? ltrim(substr(parse_url($ref, PHP_URL_PATH), strlen(BASE_URL)), '/') : '');

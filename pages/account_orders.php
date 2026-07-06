@@ -12,7 +12,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('Order cancelled.');
     } elseif ($order && ($_POST['do'] ?? '') === 'pay') {
         $ref = trim($_POST['reference_number'] ?? '');
-        $method = array_key_exists($_POST['payment_method'] ?? '', PAYMENT_METHODS) ? $_POST['payment_method'] : 'bank_transfer';
+        $methods = payment_methods(false);
+        $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
         $proof = upload_image($_FILES['proof_image'] ?? [], 'payments');
         if ($ref === '' && !$proof) {
             flash('Add a transaction reference or a proof screenshot.', 'error');
@@ -67,9 +68,10 @@ include __DIR__ . '/../views/layout_top.php';
             <input type="hidden" name="do" value="pay"><input type="hidden" name="order_id" value="<?= $o['id'] ?>">
             <label>Method
               <select name="payment_method">
-                <?php foreach (PAYMENT_METHODS as $k => $l): ?><option value="<?= $k ?>" <?= $o['payment_method'] === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?>
+                <?php foreach (payment_methods(false) as $k => $l): ?><option value="<?= $k ?>" <?= $o['payment_method'] === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?>
               </select>
             </label>
+            <?php if (payment_instructions()): ?><p class="muted small"><?= nl2br(e(payment_instructions())) ?></p><?php endif; ?>
             <label>Transaction reference <input name="reference_number" placeholder="e.g. FT26XXXX / Telebirr ref"></label>
             <label>Proof screenshot <input type="file" name="proof_image" accept="image/*"></label>
             <button class="btn btn-primary btn-sm">Submit</button>

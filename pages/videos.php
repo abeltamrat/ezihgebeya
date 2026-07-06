@@ -7,19 +7,20 @@ $where = "v.status = 'approved' AND b.status = 'active'";
 $params = [];
 if ($city) { $where .= " AND v.city = ?"; $params[] = $city; }
 
-// §6.5 Video Score: location 25% + engagement 15% + verification 15% + freshness 10%
-// + rating 10% + promotion 5% − report penalty (category match applies via linked listing)
-$score = "((v.city <=> ?) * 25 + (v.subcity <=> ?) * 8"
-    . " + LEAST(15, LOG(1 + v.views_count + v.cta_clicks_count * 5) * 3)"
-    . " + (b.verification_status != 'unverified') * 15"
-    . " + GREATEST(0, 10 - DATEDIFF(NOW(), v.created_at) / 3)"
-    . " + LEAST(10, b.rating_average * 2)"
-    . " + v.is_promoted * 5 + v.is_featured * 3"
-    . " - v.reports_count * 8)";
+// §6.5 Video Score — weights tunable in admin → Settings → ranking
+$W = fn(string $k) => (float)sys("video_ranking.$k");
+$score = "((v.city <=> ?) * {$W('city')} + (v.subcity <=> ?) * {$W('subcity')}"
+    . " + LEAST(15, LOG(1 + v.views_count + v.cta_clicks_count * 5) * {$W('engagement')})"
+    . " + (b.verification_status != 'unverified') * {$W('verification')}"
+    . " + GREATEST(0, {$W('freshness')} - DATEDIFF(NOW(), v.created_at) / 3)"
+    . " + LEAST(10, b.rating_average * {$W('rating')})"
+    . " + v.is_promoted * {$W('promoted')} + v.is_featured * {$W('featured')}"
+    . " - v.reports_count * {$W('report_penalty')})";
+$feedSize = (int)sys('limits.video_feed_size', 50);
 $videos = rows("SELECT v.*, b.business_name b_name, b.slug b_slug, b.verification_status b_verification, b.rating_average b_rating
     FROM video_posts v JOIN businesses b ON b.id = v.business_id
     WHERE $where
-    ORDER BY $score DESC, v.created_at DESC LIMIT 50", array_merge([$loc['city'], $loc['subcity']], $params));
+    ORDER BY $score DESC, v.created_at DESC LIMIT $feedSize", array_merge([$loc['city'], $loc['subcity']], $params));
 
 // resolve linked listing (title, price, url) per video
 foreach ($videos as &$v) {

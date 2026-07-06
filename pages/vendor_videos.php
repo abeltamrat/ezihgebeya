@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['do'] ?? '') === 'delete') 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     if (!can_add_video($biz['id'])) {
-        flash('Video limit reached for your ' . PLANS[current_plan($biz['id'])]['label'] . ' plan. Upgrade to add more.', 'error');
+        flash('Video limit reached for your ' . plans()[current_plan($biz['id'])]['label'] . ' plan. Upgrade to add more.', 'error');
         redirect('vendor/subscription');
     }
     $platform = $_POST['platform'] ?? '';
@@ -36,11 +36,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else { $linkedId = null; }
 
     if (!$errors) {
+        $vStatus = sys('moderation.auto_approve_videos') ? 'approved' : 'pending'; // §16.3 policy switch
         q("INSERT INTO video_posts (business_id, user_id, platform, original_url, video_id, embed_url, title, linked_type, linked_id, cta_label, city, subcity, status)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
           [$biz['id'], $u['id'], $platform, $urlIn, $parsed['video_id'], $parsed['embed_url'], $title ?: null,
-           $linkedType, $linkedId, $cta, $biz['city'], $biz['subcity']]);
-        flash('Video submitted for review. It appears in the feed once approved.');
+           $linkedType, $linkedId, $cta, $biz['city'], $biz['subcity'], $vStatus]);
+        flash($vStatus === 'approved' ? 'Video published to the feed!' : 'Video submitted for review. It appears in the feed once approved.');
         redirect('vendor/videos');
     }
 }

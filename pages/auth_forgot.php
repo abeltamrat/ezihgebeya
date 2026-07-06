@@ -27,8 +27,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($do === 'reset') {
         $phone = $_SESSION['pw_reset_phone'] ?? '';
         $pass = $_POST['password'] ?? '';
-        if (strlen($pass) < 6) {
-            $error = 'Password must be at least 6 characters.';
+        $minPass = (int)sys('auth.min_password_len', 6);
+        if (strlen($pass) < $minPass) {
+            $error = "Password must be at least $minPass characters.";
         } elseif ($phone && otp_verify($phone, 'reset_password', $_POST['code'] ?? '')) {
             q("UPDATE users SET password = ? WHERE phone = ?", [password_hash($pass, PASSWORD_BCRYPT), $phone]);
             unset($_SESSION['pw_reset_phone']);

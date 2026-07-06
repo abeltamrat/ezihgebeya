@@ -19,9 +19,11 @@ if (!in_array($type, ['product', 'service', 'supply', 'business', 'video'], true
 }
 if (!val("SELECT COUNT(*) FROM businesses WHERE id = ? AND status = 'active'", [$bid])) redirect('');
 
-// rate limit: max 5 inquiries per 10 min per session
-$_SESSION['inq_times'] = array_filter($_SESSION['inq_times'] ?? [], fn($t) => $t > time() - 600);
-if (count($_SESSION['inq_times']) >= 5) { flash('Too many inquiries — please wait a few minutes.', 'error'); redirect(''); }
+// rate limit per session — thresholds set in admin → Settings → Limits
+$rateMax = (int)sys('limits.inquiry_rate_max', 5);
+$rateWindow = (int)sys('limits.inquiry_rate_window_min', 10) * 60;
+$_SESSION['inq_times'] = array_filter($_SESSION['inq_times'] ?? [], fn($t) => $t > time() - $rateWindow);
+if (count($_SESSION['inq_times']) >= $rateMax) { flash('Too many inquiries — please wait a few minutes.', 'error'); redirect(''); }
 $_SESSION['inq_times'][] = time();
 
 $listingTitle = null;

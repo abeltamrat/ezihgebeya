@@ -29,11 +29,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               [$name, $desc, $phone, $city, $subcity, $area, $address, $tin, $license, $logo, $cover, $biz['id']]);
             flash('Business profile updated.');
         } else {
+            $bizStatus = sys('moderation.auto_approve_businesses') ? 'active' : 'pending'; // §16.3 policy switch
             q("INSERT INTO businesses (user_id, business_name, slug, business_type, description, phone, city, subcity, area_name, address, tin_number, license_number, logo, cover_image, verification_status, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'phone_verified', 'pending')",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'phone_verified', ?)",
               [$u['id'], $name, slugify($name, 'businesses'), $u['account_type'] === 'customer' ? 'mixed' : $u['account_type'],
-               $desc, $phone, $city, $subcity, $area, $address, $tin, $license, $logo, $cover]);
-            flash('Business submitted! An admin will review and approve it shortly.');
+               $desc, $phone, $city, $subcity, $area, $address, $tin, $license, $logo, $cover, $bizStatus]);
+            flash($bizStatus === 'active' ? 'Business created — you can start listing right away!'
+                                          : 'Business submitted! An admin will review and approve it shortly.');
         }
         redirect('vendor');
     }

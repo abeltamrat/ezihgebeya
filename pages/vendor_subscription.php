@@ -11,9 +11,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $newPlan = $_POST['plan'] ?? '';
     $months = max(1, min(12, (int)($_POST['months'] ?? 1)));
     $ref = trim($_POST['reference_number'] ?? '');
-    $method = array_key_exists($_POST['payment_method'] ?? '', PAYMENT_METHODS) ? $_POST['payment_method'] : 'telebirr';
-    if (isset(PLANS[$newPlan]) && $newPlan !== 'free') {
-        $cost = PLANS[$newPlan]['price'] * $months;
+    $methods = payment_methods(false);
+    $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
+    if (isset(plans()[$newPlan]) && $newPlan !== 'free') {
+        $cost = plans()[$newPlan]['price'] * $months;
         q("INSERT INTO subscriptions (business_id, plan, months, status) VALUES (?,?,?, 'pending')", [$biz['id'], $newPlan, $months]);
         $sid = (int)db()->lastInsertId();
         $proof = upload_image($_FILES['proof_image'] ?? [], 'payments');
@@ -31,14 +32,18 @@ include __DIR__ . '/../views/layout_top.php';
   <?php include __DIR__ . '/../views/vendor_nav.php'; ?>
   <div class="dash-main">
     <h1>⭐ Subscription</h1>
-    <p>Current plan: <strong><?= PLANS[$plan]['label'] ?></strong>
-      · Listings used: <strong><?= $used ?><?= PLANS[$plan]['listings'] >= 0 ? ' / ' . PLANS[$plan]['listings'] : '' ?></strong></p>
+    <?php $PL = plans(); ?>
+    <p>Current plan: <strong><?= $PL[$plan]['label'] ?></strong>
+      · Listings used: <strong><?= $used ?><?= $PL[$plan]['listings'] >= 0 ? ' / ' . $PL[$plan]['listings'] : '' ?></strong></p>
+    <?php if (payment_instructions()): ?>
+      <div class="panel"><h4>How to pay</h4><p class="muted small"><?= nl2br(e(payment_instructions())) ?></p></div>
+    <?php endif; ?>
 
     <div class="stat-grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">
-      <?php foreach (PLANS as $k => $p): ?>
+      <?php foreach ($PL as $k => $p): ?>
       <div class="stat-card" style="text-align:left; <?= $k === $plan ? 'border-color:var(--brand);border-width:2px' : '' ?>">
         <h3><?= $p['label'] ?> <?= $k === $plan ? '✔' : '' ?></h3>
-        <div class="stat-num" style="font-size:1.2rem"><?= $p['price'] ? number_format($p['price']) . ' ETB/mo' : 'Free' ?></div>
+        <div class="stat-num" style="font-size:1.2rem"><?= $p['price'] ? number_format($p['price']) . ' ' . e(sys('general.currency_label', 'ETB')) . '/mo' : 'Free' ?></div>
         <ul class="small" style="padding-left:18px;color:var(--muted)">
           <li><?= $p['listings'] < 0 ? 'Unlimited' : $p['listings'] ?> listings</li>
           <li><?= $p['videos'] < 0 ? 'Unlimited' : $p['videos'] ?> video<?= $p['videos'] === 1 ? '' : 's' ?></li>
@@ -52,7 +57,7 @@ include __DIR__ . '/../views/layout_top.php';
             <input type="hidden" name="plan" value="<?= $k ?>">
             <label>Months <input type="number" name="months" value="1" min="1" max="12"></label>
             <label>Payment method
-              <select name="payment_method"><?php foreach (PAYMENT_METHODS as $mk => $ml): ?><option value="<?= $mk ?>"><?= $ml ?></option><?php endforeach; ?></select>
+              <select name="payment_method"><?php foreach (payment_methods(false) as $mk => $ml): ?><option value="<?= $mk ?>"><?= $ml ?></option><?php endforeach; ?></select>
             </label>
             <label>Reference <input name="reference_number"></label>
             <label>Proof <input type="file" name="proof_image" accept="image/*"></label>
@@ -70,7 +75,7 @@ include __DIR__ . '/../views/layout_top.php';
       <tr><th>Plan</th><th>Months</th><th>Status</th><th>Period</th><th>Requested</th></tr>
       <?php foreach ($history as $s): ?>
       <tr>
-        <td><?= PLANS[$s['plan']]['label'] ?? e($s['plan']) ?></td>
+        <td><?= $PL[$s['plan']]['label'] ?? e($s['plan']) ?></td>
         <td><?= (int)$s['months'] ?></td>
         <td><span class="badge badge-status-<?= e($s['status']) ?>"><?= e($s['status']) ?></span></td>
         <td class="small"><?= $s['starts_at'] ? date('M j, Y', strtotime($s['starts_at'])) . ' – ' . date('M j, Y', strtotime($s['ends_at'])) : '—' ?></td>

@@ -11,6 +11,12 @@ $accountTypes = [
     'supplier' => ['📦 Supply Vendor', 'MDF, plywood, hardware, paint, tools'],
 ];
 
+if (!sys('general.registration_open', 1)) {
+    flash('New registrations are temporarily closed.', 'error');
+    redirect('login');
+}
+$minPass = (int)sys('auth.min_password_len', 6);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $name = trim($_POST['full_name'] ?? '');
@@ -22,21 +28,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (mb_strlen($name) < 2) $errors[] = 'Please enter your full name.';
     if (strlen($phone) < 9) $errors[] = 'Please enter a valid phone number.';
     if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Invalid email address.';
-    if (strlen($pass) < 6) $errors[] = 'Password must be at least 6 characters.';
+    if (strlen($pass) < $minPass) $errors[] = "Password must be at least $minPass characters.";
     if (!isset($accountTypes[$type])) $errors[] = 'Invalid account type.';
     if ($phone && val("SELECT COUNT(*) FROM users WHERE phone = ?", [$phone])) $errors[] = 'Phone already registered.';
     if ($email && val("SELECT COUNT(*) FROM users WHERE email = ?", [$email])) $errors[] = 'Email already registered.';
 
     if (!$errors) {
-        q("INSERT INTO users (full_name, phone, email, password, account_type, status)
-           VALUES (?,?,?,?,?, 'active')",
-          [$name, $phone, $email ?: null, password_hash($pass, PASSWORD_BCRYPT), $type]);
+        $otpRequired = (bool)sys('auth.otp_required', 1);
+        q("INSERT INTO users (full_name, phone, email, password, account_type, status, phone_verified_at)
+           VALUES (?,?,?,?,?, 'active', ?)",
+          [$name, $phone, $email ?: null, password_hash($pass, PASSWORD_BCRYPT), $type,
+           $otpRequired ? null : date('Y-m-d H:i:s')]);
         $_SESSION['user_id'] = (int)db()->lastInsertId();
         $_SESSION['last_seen'] = time();
         session_regenerate_id(true);
-        otp_send($phone, 'verify_phone'); // §5.1.4 — confirm the number by SMS
-        flash('Welcome to ' . SITE_NAME . '!');
-        redirect('verify');
+        flash('Welcome to ' . site_name() . '!');
+        if ($otpRequired) {
+            otp_send($phone, 'verify_phone'); // §5.1.4 — confirm the number by SMS
+            redirect('verify');
+        }
+        redirect(in_array($type, VENDOR_TYPES, true) ? 'vendor/business' : '');
     }
 }
 include __DIR__ . '/../views/layout_top.php';
@@ -58,7 +69,7 @@ include __DIR__ . '/../views/layout_top.php';
     <label>Full name <input name="full_name" required value="<?= e($_POST['full_name'] ?? '') ?>"></label>
     <label>Phone number <input name="phone" required placeholder="09… or +2519…" value="<?= e($_POST['phone'] ?? '') ?>"></label>
     <label>Email (optional) <input type="email" name="email" value="<?= e($_POST['email'] ?? '') ?>"></label>
-    <label>Password <input type="password" name="password" required minlength="6"></label>
+    <label>Password <input type="password" name="password" required minlength="<?= (int)sys('auth.min_password_len', 6) ?>"></label>
     <button class="btn btn-primary btn-block">Create account</button>
     <p class="muted">Already have an account? <a href="<?= url('login') ?>">Log in</a></p>
   </form>

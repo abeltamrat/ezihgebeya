@@ -13,7 +13,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $subcity = trim($_POST['subcity'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $note = trim($_POST['note'] ?? '');
-    $method = array_key_exists($_POST['payment_method'] ?? '', PAYMENT_METHODS) ? $_POST['payment_method'] : 'cash_on_delivery';
+    $enabledMethods = payment_methods(); // admin → Settings → Payments
+    $method = array_key_exists($_POST['payment_method'] ?? '', $enabledMethods) ? $_POST['payment_method'] : array_key_first($enabledMethods);
 
     if (strlen($phone) < 9) $errors[] = 'Phone number required.';
     if ($delivery === 'delivery' && ($address === '' || !isset(CITIES[$city]))) $errors[] = 'Delivery address and city required.';
@@ -67,10 +68,13 @@ include __DIR__ . '/../views/layout_top.php';
       <label>Note to seller <textarea name="note" rows="2"></textarea></label>
 
       <h3>Payment</h3>
-      <label class="check"><input type="radio" name="payment_method" value="cash_on_delivery" checked> Cash on delivery / pickup</label>
-      <?php foreach (PAYMENT_METHODS as $k => $label): ?>
-        <label class="check"><input type="radio" name="payment_method" value="<?= $k ?>"> <?= $label ?> (manual confirmation — upload proof after ordering)</label>
-      <?php endforeach; ?>
+      <?php $first = true; foreach (payment_methods() as $k => $label): ?>
+        <label class="check"><input type="radio" name="payment_method" value="<?= $k ?>" <?= $first ? 'checked' : '' ?>>
+          <?= $label ?><?= $k === 'cash_on_delivery' ? '' : ' (manual confirmation — upload proof after ordering)' ?></label>
+      <?php $first = false; endforeach; ?>
+      <?php if (payment_instructions()): ?>
+        <p class="muted small"><?= nl2br(e(payment_instructions())) ?></p>
+      <?php endif; ?>
       <button class="btn btn-primary btn-lg btn-block">Place order<?= count($groups) > 1 ? 's' : '' ?> — <?= money($grand) ?></button>
     </form>
   </div>

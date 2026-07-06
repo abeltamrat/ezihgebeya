@@ -54,7 +54,7 @@ C:\xampp\php\php.exe database\seed5.php
 - **Subscriptions (§26.2)**: Free/Basic/Pro/Premium plans with enforced listing & video limits; Premium grants the premium-verified badge and AR upload rights
 - **AR preview (§7)**: Premium vendors upload `.glb`/`.usdz`; product pages render Google `<model-viewer>` with WebXR/Scene-Viewer/Quick-Look AR modes
 - **Vendor analytics (§24.2)**: views, CTA clicks, lead conversion %, leads by source/status, top products, video CTR
-- **Cron (§21.3)**: `GET /cron/daily?secret=arko-cron-2026` — expires promotions/subscriptions, pauses listings of suspended businesses, closes stale inquiries (schedule via Task Scheduler / cPanel cron)
+- **Cron (§21.3)**: `GET /cron/daily?secret=ezih-cron-2026` — expires promotions/subscriptions, pauses listings of suspended businesses, closes stale inquiries (schedule via Task Scheduler / cPanel cron)
 - **SEO (§25)**: `sitemap.xml`, JSON-LD Product/Service structured data, Open Graph tags
 - **Telegram Mini App (§3.3)**: telegram-web-app.js loaded; inside Telegram the app expands full-screen and inquiry sources are tagged `telegram_mini_app`
 

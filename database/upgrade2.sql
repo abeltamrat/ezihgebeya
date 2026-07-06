@@ -1,5 +1,5 @@
--- ArkoMarket Phase 3-5 upgrade: orders, payments, promotions, subscriptions
-USE arkomarket;
+-- EzihGebeya Phase 3-5 upgrade: orders, payments, promotions, subscriptions
+USE ezihgebeya;
 
 CREATE TABLE IF NOT EXISTS orders (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

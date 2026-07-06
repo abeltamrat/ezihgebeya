@@ -63,8 +63,8 @@ include __DIR__ . '/../views/layout_top.php';
       <div class="tiktok-media"><?= video_embed_html($v) ?></div>
       <div class="tiktok-scrim"></div>
       <div class="tiktok-rail">
-        <button type="button" class="rail-btn" title="Share" onclick="arkoVideoEvent(<?= (int)$v['id'] ?>, 'share');arkoShare('<?= e($v['link_title']) ?>', '<?= e($v['link_href']) ?>')">🔗</button>
-        <a class="rail-btn" title="Visit shop" onclick="arkoVideoEvent(<?= (int)$v['id'] ?>, 'profile_click')" href="<?= url('businesses/' . e($v['b_slug'])) ?>">🏪</a>
+        <button type="button" class="rail-btn" title="Share" onclick="ezihVideoEvent(<?= (int)$v['id'] ?>, 'share');ezihShare('<?= e($v['link_title']) ?>', '<?= e($v['link_href']) ?>')">🔗</button>
+        <a class="rail-btn" title="Visit shop" onclick="ezihVideoEvent(<?= (int)$v['id'] ?>, 'profile_click')" href="<?= url('businesses/' . e($v['b_slug'])) ?>">🏪</a>
         <form method="post" action="<?= url('report') ?>" onsubmit="return confirm('Report this video?')">
           <?= csrf_field() ?>
           <input type="hidden" name="reported_type" value="video">
@@ -93,7 +93,7 @@ include __DIR__ . '/../views/layout_top.php';
     <?php endforeach; ?>
   </div>
 <?php endif; ?>
-<script>function arkoShare(title, path) {
+<script>function ezihShare(title, path) {
   var url = location.origin + path;
   if (navigator.share) { navigator.share({ title: title, url: url }).catch(function () {}); }
   else { navigator.clipboard && navigator.clipboard.writeText(url); alert('Link copied:\n' + url); }
@@ -101,7 +101,7 @@ include __DIR__ . '/../views/layout_top.php';
 
 // §6.6 engagement events: view when a slide fills the screen, watch milestones by
 // on-screen time (official embeds expose no playback API, so visible-time is the proxy).
-function arkoVideoEvent(id, event, watched) {
+function ezihVideoEvent(id, event, watched) {
   var body = new FormData();
   body.append('video_id', id);
   body.append('event', event);
@@ -120,14 +120,14 @@ function arkoVideoEvent(id, event, watched) {
       if (!id) return;
       if (en.isIntersecting) {
         en.target.classList.add('is-active');
-        arkoVideoEvent(id, 'view');
+        ezihVideoEvent(id, 'view');
         var start = Date.now();
         timers[id] = setInterval(function () {
           var secs = Math.round((Date.now() - start) / 1000);
           milestones.forEach(function (m) {
             if (secs >= m[0] && !en.target.dataset['sent' + m[0]]) {
               en.target.dataset['sent' + m[0]] = '1';
-              arkoVideoEvent(id, m[1], secs);
+              ezihVideoEvent(id, m[1], secs);
             }
           });
           if (secs > 65) { clearInterval(timers[id]); delete timers[id]; }

@@ -1,5 +1,5 @@
--- ArkoMarket Ads module (spec §9): placements, targeting, pricing, tracking
-USE arkomarket;
+-- EzihGebeya Ads module (spec §9): placements, targeting, pricing, tracking
+USE ezihgebeya;
 
 CREATE TABLE IF NOT EXISTS ads (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

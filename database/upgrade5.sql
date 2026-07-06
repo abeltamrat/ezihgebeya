@@ -1,7 +1,7 @@
--- ArkoMarket upgrade 5: auth hardening, verification workflow, messaging,
+-- EzihGebeya upgrade 5: auth hardening, verification workflow, messaging,
 -- notifications, video events, content pages, locations, audit log, API tokens,
 -- review replies/images (spec §5.1, §5.2, §6.6, §10, §13, §14, §15, §16, §18, §22)
-USE arkomarket;
+USE ezihgebeya;
 
 -- §5.1 OTP by SMS + password reset codes
 CREATE TABLE IF NOT EXISTS otp_codes (

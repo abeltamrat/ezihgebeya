@@ -1,6 +1,6 @@
--- ArkoMarket MVP schema (from Development Documentation v1.0, section 17)
-CREATE DATABASE IF NOT EXISTS arkomarket CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE arkomarket;
+-- EzihGebeya MVP schema (from Development Documentation v1.0, section 17)
+CREATE DATABASE IF NOT EXISTS ezihgebeya CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE ezihgebeya;
 
 DROP TABLE IF EXISTS favorites, reports, reviews, inquiries, video_posts, supplies, services, product_media, products, categories, businesses, users;
 

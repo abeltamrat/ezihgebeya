@@ -6,7 +6,7 @@ $host = $_SERVER['HTTP_HOST'] ?? '';
 define('BASE_URL', getenv('APP_BASE_URL') ?: ($host === 'ezihgebeya.nonstopplc.com' ? '' : '/ezihgebeya'));
 
 define('DB_HOST', '127.0.0.1');
-define('DB_NAME', 'arkomarket');
+define('DB_NAME', 'ezihgebeya');
 define('DB_USER', 'root');
 define('DB_PASS', '');
 
@@ -102,7 +102,7 @@ const AD_PRICING = ['cpm' => 'CPM (per 1,000 views)', 'cpc' => 'CPC (per click)'
 // Contact shown on "Advertise here" house ads when a slot has no paid campaign
 define('AD_SALES_CONTACT', 'tel:0911000000');
 
-define('CRON_SECRET', 'arko-cron-2026');
+define('CRON_SECRET', 'ezih-cron-2026');
 
 // DEV mode: OTP codes are flashed on screen and SMS/email go to database/outbox.log
 // instead of a real gateway. Set to false at launch once a gateway is wired in.

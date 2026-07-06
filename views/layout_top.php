@@ -23,6 +23,11 @@
 <script async src="https://telegram.org/js/telegram-web-app.js"></script>
 <meta name="csrf-token" content="<?= csrf_token() ?>">
 <?= sys('seo.head_snippet', '') /* admin → Settings → SEO: analytics / verification tags */ ?>
+<!-- Alpine.js (reactive UI components) -->
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<!-- HTMX (AJAX without writing JS) -->
+<script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
+<style>[x-cloak]{display:none!important}</style>
 </head>
 <body data-loc-source="<?= e($loc['source']) ?>" data-loc-city="<?= e($loc['city']) ?>">
 <?php if (!empty($ui['announcement_enabled']) && trim((string)$ui['announcement_text']) !== ''): ?>
@@ -38,16 +43,47 @@
       <span class="logo-mark"><?= e($ui['logo_mark']) ?></span>
       <span><?= e($ui['logo_text']) ?></span>
     </a>
-    <form class="header-search" action="<?= url('search') ?>" method="get">
-      <input type="search" name="q" placeholder="Search furniture, services, supplies..." value="<?= e($_GET['q'] ?? '') ?>">
-      <button type="submit">Search</button>
-    </form>
+    <div class="search-wrap"
+         x-data="searchAc()"
+         @click.outside="close()"
+         @keydown.escape.window="close()">
+      <form class="header-search" action="<?= url('search') ?>" method="get" autocomplete="off">
+        <input type="search" name="q" id="header-search-input"
+               placeholder="Search furniture, services, supplies..."
+               value="<?= e($_GET['q'] ?? '') ?>"
+               x-ref="input"
+               @input.debounce.300ms="suggest($event.target.value)"
+               @keydown.arrow-down.prevent="focusResult(1)"
+               @keydown.arrow-up.prevent="focusResult(-1)"
+               @keydown.enter="submitOrGo($event)"
+               hx-get="<?= url('search/suggest') ?>"
+               hx-trigger="input delay:300ms changed"
+               hx-target="#ac-results"
+               hx-swap="innerHTML"
+               hx-params="q"
+               @htmx:after-swap="open = $el.value.length > 1">
+        <button type="submit">Search</button>
+      </form>
+      <div id="ac-results"
+           x-show="open && results"
+           x-cloak
+           class="autocomplete-drop"
+           @mousedown.prevent>
+      </div>
+    </div>
     <nav class="main-nav" aria-label="Primary">
       <a href="<?= url('products') ?>"><?= system_ui_icon('furniture', 'Furniture') ?> Furniture</a>
       <a href="<?= url('services') ?>"><?= system_ui_icon('services', 'Services') ?> Services</a>
       <a href="<?= url('supplies') ?>"><?= system_ui_icon('supplies', 'Supplies') ?> Supplies</a>
       <?php if (feature_enabled('videos')): ?><a href="<?= url('videos') ?>" class="nav-video"><?= system_ui_icon('play', 'Video') ?> Video</a><?php endif; ?>
-      <?php if (feature_enabled('cart')): ?><a href="<?= url('cart') ?>" title="Cart"><?= system_ui_icon('cart', 'Cart') ?><?= cart_count() ? ' <span class="pill">' . cart_count() . '</span>' : '' ?></a><?php endif; ?>
+      <?php if (feature_enabled('cart')): ?>
+        <button class="btn btn-ghost btn-sm nav-cart-btn" title="Cart"
+                @click="$dispatch('open-cart')"
+                style="gap:6px;padding:8px 12px">
+          <?= system_ui_icon('cart', 'Cart') ?>
+          <?php if (cart_count()): ?><span class="pill" id="cart-pill"><?= cart_count() ?></span><?php endif; ?>
+        </button>
+      <?php endif; ?>
       <?php if ($u): $nUnread = unread_notifications((int)$u['id']); ?>
         <a href="<?= url('notifications') ?>" title="Notifications">🔔<?= $nUnread ? ' <span class="pill">' . $nUnread . '</span>' : '' ?></a>
       <?php endif; ?>
@@ -63,7 +99,14 @@
     </nav>
   </div>
 </header>
+<div id="page-progress"></div>
 <main>
-<?php foreach (get_flashes() as $f): ?>
-  <div class="container"><div class="flash flash-<?= e($f['type']) ?>"><?= e($f['msg']) ?></div></div>
+<?php $flashes = get_flashes(); if ($flashes): ?>
+<script>
+document.addEventListener('alpine:init', function() {
+<?php foreach ($flashes as $f): ?>
+  window.dispatchEvent(new CustomEvent('toast', {detail:{msg:<?= json_encode($f['msg']) ?>,type:<?= json_encode($f['type']) ?>}}));
 <?php endforeach; ?>
+});
+</script>
+<?php endif; ?>

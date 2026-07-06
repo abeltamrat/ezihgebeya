@@ -1,4 +1,74 @@
 </main>
+
+<!-- ── Toast / Snackbar stack ─────────────────────────────────────────── -->
+<div x-data
+     class="toast-stack"
+     aria-live="polite"
+     aria-atomic="false">
+  <template x-for="toast in $store.toasts.items" :key="toast.id">
+    <div class="toast"
+         :class="'toast-' + toast.type"
+         x-show="true"
+         x-transition:enter="toast-enter"
+         x-transition:leave="toast-leave">
+      <span class="toast-msg" x-text="toast.msg"></span>
+      <button class="toast-close" @click="$store.toasts.remove(toast.id)" aria-label="Dismiss">&times;</button>
+    </div>
+  </template>
+</div>
+
+<!-- ── Cart drawer ────────────────────────────────────────────────────── -->
+<?php if (feature_enabled('cart')): ?>
+<div x-data="{ open: false }"
+     @open-cart.window="open = true; $nextTick(() => { var b = $el.querySelector('.drawer-body'); if (b && !b.dataset.loaded) { htmx.trigger(b, 'load-cart'); b.dataset.loaded = '1'; } })"
+     @keydown.escape.window="open = false">
+
+  <div class="drawer-overlay"
+       x-show="open"
+       x-cloak
+       x-transition:enter="overlay-fade-enter"
+       x-transition:leave="overlay-fade-leave"
+       @click="open = false">
+  </div>
+
+  <div class="drawer"
+       x-show="open"
+       x-cloak
+       x-transition:enter="drawer-slide-enter"
+       x-transition:leave="drawer-slide-leave"
+       role="dialog"
+       aria-modal="true"
+       aria-label="Shopping cart">
+    <div class="drawer-header">
+      <h2><?= system_ui_icon('cart', 'Cart') ?> &nbsp;My Cart</h2>
+      <button class="drawer-close" @click="open = false" aria-label="Close cart">&times;</button>
+    </div>
+    <div class="drawer-body"
+         hx-get="<?= url('cart/drawer') ?>"
+         hx-trigger="load-cart"
+         hx-swap="innerHTML">
+      <!-- skeleton while loading -->
+      <div class="skeleton-card" style="margin-bottom:12px">
+        <div class="skeleton-body">
+          <div class="skeleton skeleton-line w-80"></div>
+          <div class="skeleton skeleton-line w-55"></div>
+          <div class="skeleton skeleton-line w-35"></div>
+        </div>
+      </div>
+      <div class="skeleton-card">
+        <div class="skeleton-body">
+          <div class="skeleton skeleton-line w-80"></div>
+          <div class="skeleton skeleton-line w-55"></div>
+        </div>
+      </div>
+    </div>
+    <div class="drawer-footer">
+      <a href="<?= url('cart') ?>" class="btn btn-primary btn-block">View full cart &amp; checkout</a>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
+
 <footer class="site-footer">
   <div class="container footer-grid">
     <div>

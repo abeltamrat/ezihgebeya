@@ -1,5 +1,4 @@
 RewriteEngine On
-RewriteBase /ezihgebeya/
 
 # pass the Authorization header through to PHP (needed for /api bearer tokens)
 RewriteCond %{HTTP:Authorization} .

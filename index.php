@@ -69,6 +69,10 @@ match (true) {
     $seg[0] === 'videos' && count($seg) === 1     => require $P . 'videos.php',
     $seg[0] === 'videos' && ($seg[1] ?? '') === 'cta' => call($P, 'video_cta.php', ['id' => (int)($seg[2] ?? 0)]),
 
+    // HTMX partials (no layout — return HTML fragments only)
+    $path === 'search/suggest' => require $P . 'search_suggest.php',
+    $path === 'cart/drawer'    => require $P . 'cart_drawer.php',
+
     // location + ads
     $path === 'location' => require $P . 'location.php',
     $seg[0] === 'ads' && ($seg[1] ?? '') === 'go' => call($P, 'ad_click.php', ['id' => (int)($seg[2] ?? 0)]),

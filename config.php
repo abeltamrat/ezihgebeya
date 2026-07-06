@@ -6,7 +6,7 @@ $host = $_SERVER['HTTP_HOST'] ?? '';
 define('BASE_URL', getenv('APP_BASE_URL') ?: ($host === 'ezihgebeya.nonstopplc.com' ? '' : '/ezihgebeya'));
 
 define('DB_HOST', '127.0.0.1');
-define('DB_NAME', 'ezihgebeya');
+define('DB_NAME', 'nonstopp_ezihgebeya');
 define('DB_USER', 'root');
 define('DB_PASS', '');
 

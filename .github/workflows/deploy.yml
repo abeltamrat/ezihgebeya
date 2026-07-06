@@ -22,6 +22,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate FTP target
+        run: |
+          if [ "${{ secrets.FTP_SERVER_DIR }}" != "/ezihgebeya.nonstopplc.com/" ]; then
+            echo "FTP_SERVER_DIR must be exactly /ezihgebeya.nonstopplc.com/ to prevent deploying into the cPanel account root."
+            exit 1
+          fi
+
       - name: FTP deploy
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:

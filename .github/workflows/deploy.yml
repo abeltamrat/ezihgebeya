@@ -46,3 +46,16 @@ jobs:
             uploads/payments/**
             uploads/ui/**
             uploads/ar-models/**
+            *.php
+            *.css
+            *.js
+            *.html
+            *.json
+            *.sql
+            *.md
+            admin/**
+            api/**
+            assets/**
+            database/**
+            includes/**
+            uploads/**

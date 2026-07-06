@@ -22,20 +22,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate FTP target
-        run: |
-          if [ "${{ secrets.FTP_SERVER_DIR }}" != "/ezihgebeya.nonstopplc.com/" ]; then
-            echo "FTP_SERVER_DIR must be exactly /ezihgebeya.nonstopplc.com/ to prevent deploying into the cPanel account root."
-            exit 1
-          fi
-
       - name: FTP deploy
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ secrets.FTP_SERVER_DIR }}
+          # Fixed in-repo (instead of a secret) so it can never point at the
+          # cPanel account root and never fail validation on a missing secret.
+          server-dir: /ezihgebeya.nonstopplc.com/
           local-dir: ./
           exclude: |
             **/.git*
@@ -45,6 +40,7 @@ jobs:
             **/.DS_Store
             **/Thumbs.db
             **/*.log
+            config.php
             database/outbox.log
             backups/**
             uploads/payments/**

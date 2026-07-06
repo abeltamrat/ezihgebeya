@@ -1,10 +1,6 @@
 -- EzihGebeya MVP schema (from Development Documentation v1.0, section 17)
-CREATE DATABASE IF NOT EXISTS ezihgebeya CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE ezihgebeya;
 
-DROP TABLE IF EXISTS favorites, reports, reviews, inquiries, video_posts, supplies, services, product_media, products, categories, businesses, users;
-
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     full_name VARCHAR(150) NOT NULL,
     phone VARCHAR(30) UNIQUE,
@@ -19,7 +15,7 @@ CREATE TABLE users (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
-CREATE TABLE businesses (
+CREATE TABLE IF NOT EXISTS businesses (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
     business_name VARCHAR(200) NOT NULL,
@@ -47,7 +43,7 @@ CREATE TABLE businesses (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
-CREATE TABLE categories (
+CREATE TABLE IF NOT EXISTS categories (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     parent_id BIGINT UNSIGNED NULL,
     name VARCHAR(150) NOT NULL,
@@ -61,7 +57,7 @@ CREATE TABLE categories (
     FOREIGN KEY (parent_id) REFERENCES categories(id)
 );
 
-CREATE TABLE products (
+CREATE TABLE IF NOT EXISTS products (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     business_id BIGINT UNSIGNED NOT NULL,
     category_id BIGINT UNSIGNED NOT NULL,
@@ -101,7 +97,7 @@ CREATE TABLE products (
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );
 
-CREATE TABLE product_media (
+CREATE TABLE IF NOT EXISTS product_media (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     product_id BIGINT UNSIGNED NOT NULL,
     media_type ENUM('image','video','model_3d_glb','model_3d_usdz','thumbnail') DEFAULT 'image',
@@ -112,7 +108,7 @@ CREATE TABLE product_media (
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 
-CREATE TABLE services (
+CREATE TABLE IF NOT EXISTS services (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     business_id BIGINT UNSIGNED NOT NULL,
     category_id BIGINT UNSIGNED NOT NULL,
@@ -137,7 +133,7 @@ CREATE TABLE services (
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );
 
-CREATE TABLE supplies (
+CREATE TABLE IF NOT EXISTS supplies (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     business_id BIGINT UNSIGNED NOT NULL,
     category_id BIGINT UNSIGNED NOT NULL,
@@ -169,7 +165,7 @@ CREATE TABLE supplies (
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );
 
-CREATE TABLE video_posts (
+CREATE TABLE IF NOT EXISTS video_posts (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     business_id BIGINT UNSIGNED NOT NULL,
     user_id BIGINT UNSIGNED NOT NULL,
@@ -196,7 +192,7 @@ CREATE TABLE video_posts (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
-CREATE TABLE inquiries (
+CREATE TABLE IF NOT EXISTS inquiries (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     customer_id BIGINT UNSIGNED NULL,
     business_id BIGINT UNSIGNED NOT NULL,
@@ -216,7 +212,7 @@ CREATE TABLE inquiries (
     FOREIGN KEY (business_id) REFERENCES businesses(id)
 );
 
-CREATE TABLE reviews (
+CREATE TABLE IF NOT EXISTS reviews (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     reviewer_id BIGINT UNSIGNED NOT NULL,
     business_id BIGINT UNSIGNED NOT NULL,
@@ -233,7 +229,7 @@ CREATE TABLE reviews (
     FOREIGN KEY (business_id) REFERENCES businesses(id)
 );
 
-CREATE TABLE reports (
+CREATE TABLE IF NOT EXISTS reports (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     reporter_id BIGINT UNSIGNED NULL,
     reported_type ENUM('product','service','supply','business','video','review','user') NOT NULL,
@@ -247,7 +243,7 @@ CREATE TABLE reports (
     FOREIGN KEY (reporter_id) REFERENCES users(id)
 );
 
-CREATE TABLE favorites (
+CREATE TABLE IF NOT EXISTS favorites (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
     product_id BIGINT UNSIGNED NOT NULL,
@@ -257,14 +253,14 @@ CREATE TABLE favorites (
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 
-CREATE TABLE site_settings (
+CREATE TABLE IF NOT EXISTS site_settings (
     setting_key VARCHAR(100) PRIMARY KEY,
     setting_value MEDIUMTEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
 -- Categories seed
-INSERT INTO categories (name, slug, type, icon, sort_order) VALUES
+INSERT IGNORE INTO categories (name, slug, type, icon, sort_order) VALUES
 ('Sofa','sofa','product','🛋️',1),
 ('Bed','bed','product','🛏️',2),
 ('Dining Table','dining-table','product','🍽️',3),

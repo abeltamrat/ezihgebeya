@@ -1,11 +1,12 @@
 // EzihGebeya service worker - cache static assets, network-first for pages
 const CACHE = 'ezihgebeya-v1';
+const BASE = location.pathname.startsWith('/ezihgebeya/') ? '/ezihgebeya' : '';
 const STATIC = [
-  '/ezihgebeya/assets/css/app.css',
-  '/ezihgebeya/assets/js/app.js',
-  '/ezihgebeya/assets/icons/icon-192.png',
-  '/ezihgebeya/assets/icons/icon-512.png',
-  '/ezihgebeya/manifest.json'
+  BASE + '/assets/css/app.css',
+  BASE + '/assets/js/app.js',
+  BASE + '/assets/icons/icon-192.png',
+  BASE + '/assets/icons/icon-512.png',
+  BASE + '/manifest.json'
 ];
 
 self.addEventListener('install', e => {

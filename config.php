@@ -2,7 +2,8 @@
 // EzihGebeya configuration
 define('SITE_NAME', 'EzihGebeya');
 define('SITE_TAGLINE', 'Ethiopia\'s Furniture, Finishing & Supplies Marketplace');
-define('BASE_URL', '/ezihgebeya');
+$host = $_SERVER['HTTP_HOST'] ?? '';
+define('BASE_URL', getenv('APP_BASE_URL') ?: ($host === 'ezihgebeya.nonstopplc.com' ? '' : '/ezihgebeya'));
 
 define('DB_HOST', '127.0.0.1');
 define('DB_NAME', 'arkomarket');

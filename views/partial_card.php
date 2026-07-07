@@ -16,7 +16,7 @@ if ($cardType === 'product') {
 $typeInitial = strtoupper(substr($cardType, 0, 1));
 $ui = system_ui_config();
 ?>
-<a class="card" href="<?= $href ?>">
+<a class="card reveal" href="<?= $href ?>">
   <div class="card-img">
     <?php if ($img): ?><img src="<?= e($img) ?>" alt="<?= e($title) ?>" loading="lazy">
     <?php else: ?><div class="card-placeholder"><span class="icon-chip"><?= e($typeInitial) ?></span></div><?php endif; ?>
@@ -28,7 +28,9 @@ $ui = system_ui_config();
   <div class="card-body">
     <?php if (!empty($ui['show_card_category'])): ?><div class="card-cat"><?= e($item['c_name'] ?? '') ?></div><?php endif; ?>
     <h3 class="card-title"><?= e($title) ?></h3>
-    <?php if (!empty($ui['show_card_price'])): ?><div class="card-price"><?= $price ?: '<span class="muted">Negotiable</span>' ?></div><?php endif; ?>
+    <?php if (!empty($ui['show_card_price'])): ?>
+    <div class="card-price"><?= $price ?: '<span class="muted" style="font-size:.85rem;font-weight:600">Negotiable</span>' ?></div>
+    <?php endif; ?>
     <?php if (!empty($ui['show_card_location'])): ?>
     <div class="card-meta">
       <span class="card-ico"><?= system_ui_icon('pin', 'Location') ?></span>

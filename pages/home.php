@@ -70,10 +70,38 @@ include __DIR__ . '/../views/layout_top.php';
   </div>
 </section>
 
+<!-- Trust bar -->
+<div class="trust-bar">
+  <div class="trust-bar-inner">
+    <div class="trust-item">
+      <span class="trust-icon"><?= system_ui_icon('verified', 'Verified') ?></span>
+      Verified sellers
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon"><?= system_ui_icon('pin', 'Local') ?></span>
+      Ethiopia-wide
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon"><?= system_ui_icon('shop', 'Shop') ?></span>
+      <?= number_format((int)val("SELECT COUNT(*) FROM businesses WHERE status='active'")) ?>+ active shops
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon"><?= system_ui_icon('search', 'Listings') ?></span>
+      <?= number_format((int)val("SELECT COUNT(*) FROM products WHERE status='active'") + (int)val("SELECT COUNT(*) FROM services WHERE status='active'") + (int)val("SELECT COUNT(*) FROM supplies WHERE status='active'")) ?>+ listings
+    </div>
+  </div>
+</div>
+
 <?php foreach ($sectionOrder as $homeSection): ?>
 <?php if ($homeSection === 'categories' && system_ui_section_enabled('categories')): ?>
 <section class="container section">
-  <div class="section-head"><h2>Browse by category</h2><a href="<?= url('products') ?>">View all &rarr;</a></div>
+  <div class="section-head">
+    <div>
+      <div class="section-label"><?= system_ui_icon('furniture', 'Category') ?> Categories</div>
+      <h2>Browse by category</h2>
+    </div>
+    <a href="<?= url('products') ?>">View all &rarr;</a>
+  </div>
   <div class="cat-grid">
     <?php foreach ($prodCats as $c): ?>
       <a class="cat-tile" href="<?= url('products?category=' . e($c['slug'])) ?>">
@@ -93,7 +121,13 @@ include __DIR__ . '/../views/layout_top.php';
 
 <?php if ($homeSection === 'near' && system_ui_section_enabled('near') && $nearItems): ?>
 <section class="container section">
-  <div class="section-head"><h2>Near you in <?= e($nearLabel) ?></h2><a href="<?= url('products?city=' . urlencode($loc['city'])) ?>">View all &rarr;</a></div>
+  <div class="section-head">
+    <div>
+      <div class="section-label"><?= system_ui_icon('pin', 'Near') ?> Near you</div>
+      <h2>In <?= e($nearLabel) ?></h2>
+    </div>
+    <a href="<?= url('products?city=' . urlencode($loc['city'])) ?>">View all &rarr;</a>
+  </div>
   <div class="grid">
     <?php foreach ($nearItems as $item) { $cardType = $item['_type']; include __DIR__ . '/../views/partial_card.php'; } ?>
   </div>
@@ -102,7 +136,13 @@ include __DIR__ . '/../views/layout_top.php';
 
 <?php if ($homeSection === 'featured' && system_ui_section_enabled('featured') && $featured): ?>
 <section class="container section">
-  <div class="section-head"><h2>Featured & latest furniture</h2><a href="<?= url('products') ?>">View all &rarr;</a></div>
+  <div class="section-head">
+    <div>
+      <div class="section-label"><?= system_ui_icon('furniture', 'Featured') ?> Featured</div>
+      <h2>Latest furniture</h2>
+    </div>
+    <a href="<?= url('products') ?>">View all &rarr;</a>
+  </div>
   <div class="grid">
     <?php foreach ($featured as $item) { $cardType = 'product'; include __DIR__ . '/../views/partial_card.php'; } ?>
   </div>
@@ -115,7 +155,13 @@ include __DIR__ . '/../views/layout_top.php';
 
 <?php if ($homeSection === 'services' && system_ui_section_enabled('services') && $services): ?>
 <section class="container section">
-  <div class="section-head"><h2>Finishing & interior services</h2><a href="<?= url('services') ?>">View all &rarr;</a></div>
+  <div class="section-head">
+    <div>
+      <div class="section-label"><?= system_ui_icon('services', 'Services') ?> Services</div>
+      <h2>Finishing & interior</h2>
+    </div>
+    <a href="<?= url('services') ?>">View all &rarr;</a>
+  </div>
   <div class="grid">
     <?php foreach ($services as $item) { $cardType = 'service'; include __DIR__ . '/../views/partial_card.php'; } ?>
   </div>
@@ -124,7 +170,13 @@ include __DIR__ . '/../views/layout_top.php';
 
 <?php if ($homeSection === 'supplies' && system_ui_section_enabled('supplies') && $supplies): ?>
 <section class="container section">
-  <div class="section-head"><h2>Materials & supplies</h2><a href="<?= url('supplies') ?>">View all &rarr;</a></div>
+  <div class="section-head">
+    <div>
+      <div class="section-label"><?= system_ui_icon('supplies', 'Supplies') ?> Materials</div>
+      <h2>Supplies & raw materials</h2>
+    </div>
+    <a href="<?= url('supplies') ?>">View all &rarr;</a>
+  </div>
   <div class="grid">
     <?php foreach ($supplies as $item) { $cardType = 'supply'; include __DIR__ . '/../views/partial_card.php'; } ?>
   </div>

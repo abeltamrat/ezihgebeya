@@ -1,17 +1,19 @@
 <?php
 /**
- * JSON REST API (§18) so mobile apps can reuse the backend later (§30.15).
+ * Bearer-token JSON REST API (§18) for non-browser clients (mobile apps, third-party
+ * integrations) so they can reuse the backend later (§30.15).
  * Auth: POST /api/login returns a bearer token; send it as "Authorization: Bearer <token>".
+ * Bearer tokens are never sent by a browser automatically, so this API is inherently
+ * CSRF-safe and needs no CSRF check.
+ *
+ * The React SPA uses a *different* prefix — /api/v1/* (pages/api_v1.php) — which reuses
+ * the existing PHP session cookie instead of a bearer token. The two are intentionally
+ * not merged into one auth model; see pages/api_v1.php for why. Both share the same JSON
+ * envelope (api_out/api_error/api_validation_error, defined once in app/helpers.php) so
+ * responses look identical regardless of which one a client talks to.
  * Expects $apiSeg (path segments after /api).
  */
 header('Content-Type: application/json; charset=utf-8');
-
-function api_out($data, int $code = 200): never {
-    http_response_code($code);
-    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
-}
-function api_error(string $msg, int $code = 400): never { api_out(['ok' => false, 'error' => $msg], $code); }
 
 /** Resolve the bearer token to a user row, or null. */
 function api_user(): ?array {
@@ -206,17 +208,40 @@ if ($r0 === 'inquiries' && $method === 'POST') {
     $phone = trim($body['phone'] ?? $me['phone'] ?? '');
     if (!$bid || $msg === '' || strlen($phone) < 9) api_error('business_id, message and phone are required.');
     if (!val("SELECT COUNT(*) FROM businesses WHERE id = ? AND status = 'active'", [$bid])) api_error('Business not found.', 404);
+    // Rate limit by authenticated user, not session — session_start() gives bearer-token
+    // clients a fresh, empty session on every request (no cookie jar to persist it), so the
+    // session-based rate_limited() helper used by the web UI's action_inquiry.php would be a
+    // no-op here. Count against the same thresholds via a DB lookup keyed on customer_id instead.
+    $rateMax = (int)sys('limits.inquiry_rate_max', 5);
+    $rateWindowMin = (int)sys('limits.inquiry_rate_window_min', 10);
+    $recentCount = (int)val("SELECT COUNT(*) FROM inquiries WHERE customer_id = ? AND created_at > NOW() - INTERVAL ? MINUTE", [$me['user_id'], $rateWindowMin]);
+    if ($recentCount >= $rateMax) api_error('Too many inquiries — please wait a few minutes.', 429);
     $lid = (int)($body['listing_id'] ?? 0);
+    $trafficSource = traffic_source_for_listing($type, $lid, 'organic');
     $listingTitle = null;
     if ($lid && isset(LISTING_TABLES[$type])) {
         $t = LISTING_TABLES[$type];
         $listingTitle = val("SELECT " . listing_title_col($type) . " FROM `$t` WHERE id = ?", [$lid]);
         q("UPDATE `$t` SET inquiries_count = inquiries_count + 1 WHERE id = ?", [$lid]);
     }
-    q("INSERT INTO inquiries (customer_id, business_id, listing_type, listing_id, listing_title, inquiry_type, name, message, phone, source)
-       VALUES (?,?,?,?,?, 'product_inquiry', ?,?,?, 'pwa')",
-      [$me['user_id'], $bid, $type, $lid ?: null, $listingTitle, $me['full_name'], $msg, $phone]);
+    if (db_column_exists('inquiries', 'traffic_source')) {
+        q("INSERT INTO inquiries (customer_id, business_id, listing_type, listing_id, listing_title, inquiry_type, name, message, phone, source, traffic_source)
+           VALUES (?,?,?,?,?, 'product_inquiry', ?,?,?, 'pwa', ?)",
+          [$me['user_id'], $bid, $type, $lid ?: null, $listingTitle, $me['full_name'], $msg, $phone, $trafficSource]);
+    } else {
+        q("INSERT INTO inquiries (customer_id, business_id, listing_type, listing_id, listing_title, inquiry_type, name, message, phone, source)
+           VALUES (?,?,?,?,?, 'product_inquiry', ?,?,?, 'pwa')",
+          [$me['user_id'], $bid, $type, $lid ?: null, $listingTitle, $me['full_name'], $msg, $phone]);
+    }
     $inqId = (int)db()->lastInsertId();
+    event_record('inquiry', [
+        'user_id' => $me['user_id'],
+        'listing_type' => $type,
+        'listing_id' => $lid ?: null,
+        'business_id' => $bid,
+        'source' => $trafficSource,
+        'metadata' => ['inquiry_id' => $inqId, 'legacy_source' => 'pwa'],
+    ]);
     notify_business($bid, 'new_inquiry', 'New inquiry from ' . $me['full_name'], 'inquiries/' . $inqId, mb_substr($msg, 0, 200), true);
     api_out(['ok' => true, 'inquiry_id' => $inqId], 201);
 }

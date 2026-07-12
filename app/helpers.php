@@ -10,6 +10,170 @@ function money($amount): string {
     return number_format((float)$amount) . ' ' . $cur;
 }
 
+// Session-scoped sliding-window rate limit (cross-cutting security checklist: "Rate limits
+// for login, OTP, password reset, inquiries, reviews, and uploads"). Session-based rather
+// than IP/account-based, matching the existing inquiry limiter's convention — sufficient to
+// stop casual scripted abuse; login/OTP already have a separate, stronger IP+identity-based
+// limiter (login_throttled() in app/notify.php) for the higher-stakes auth surface.
+// Records this call as an attempt and returns true if the caller is currently rate-limited.
+function rate_limited(string $key, int $max, int $windowSeconds): bool {
+    $sessionKey = 'rate_' . $key;
+    $_SESSION[$sessionKey] = array_filter($_SESSION[$sessionKey] ?? [], fn($t) => $t > time() - $windowSeconds);
+    if (count($_SESSION[$sessionKey]) >= $max) return true;
+    $_SESSION[$sessionKey][] = time();
+    return false;
+}
+
+function db_column_exists(string $table, string $column): bool {
+    static $cache = [];
+    $key = $table . '.' . $column;
+    if (!array_key_exists($key, $cache)) {
+        try {
+            $cache[$key] = (bool)val(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                [$table, $column]
+            );
+        } catch (Throwable $e) {
+            $cache[$key] = false;
+        }
+    }
+    return $cache[$key];
+}
+
+function db_table_exists(string $table): bool {
+    static $cache = [];
+    if (!array_key_exists($table, $cache)) {
+        try {
+            $cache[$table] = (bool)val(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+                [$table]
+            );
+        } catch (Throwable $e) {
+            $cache[$table] = false;
+        }
+    }
+    return $cache[$table];
+}
+
+function traffic_source_for_listing(string $type, ?int $id, string $fallback = 'organic'): string {
+    if ($type === 'video') return 'video_feed';
+    if ($fallback === 'ad') return 'ad';
+    if (!$id || !isset(LISTING_TABLES[$type])) return in_array($fallback, ['organic', 'promoted', 'video_feed', 'ad'], true) ? $fallback : 'organic';
+    $table = LISTING_TABLES[$type];
+    try {
+        $row = row("SELECT is_promoted, is_featured FROM `$table` WHERE id = ?", [$id]);
+        if ($row && (!empty($row['is_promoted']) || !empty($row['is_featured']))) return 'promoted';
+    } catch (Throwable $e) {}
+    return in_array($fallback, ['organic', 'promoted', 'video_feed', 'ad'], true) ? $fallback : 'organic';
+}
+
+function event_record(string $eventType, array $data = []): void {
+    if (!db_table_exists('events')) return;
+    try {
+        $loc = user_location();
+        $meta = $data['metadata'] ?? null;
+        if (is_array($meta)) $meta = json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        q("INSERT INTO events (user_id, session_id, event_type, listing_type, listing_id, business_id, category_id, source, city, subcity, referrer, metadata, ip, user_agent)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+            $data['user_id'] ?? (auth()['id'] ?? null),
+            $data['session_id'] ?? session_id(),
+            $eventType,
+            $data['listing_type'] ?? null,
+            $data['listing_id'] ?? null,
+            $data['business_id'] ?? null,
+            $data['category_id'] ?? null,
+            in_array(($data['source'] ?? 'organic'), ['organic', 'promoted', 'video_feed', 'ad'], true) ? $data['source'] : 'organic',
+            $data['city'] ?? $loc['city'],
+            $data['subcity'] ?? $loc['subcity'],
+            isset($_SERVER['HTTP_REFERER']) ? mb_substr($_SERVER['HTTP_REFERER'], 0, 255) : null,
+            $meta,
+            $_SERVER['REMOTE_ADDR'] ?? null,
+            isset($_SERVER['HTTP_USER_AGENT']) ? mb_substr($_SERVER['HTTP_USER_AGENT'], 0, 255) : null,
+        ]);
+    } catch (Throwable $e) {
+        // Analytics must never block marketplace actions.
+    }
+}
+
+function active_account_sanction(int $userId): ?array {
+    if (!db_table_exists('account_sanctions')) return null;
+    return row("SELECT * FROM account_sanctions WHERE user_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1", [$userId]);
+}
+
+function create_account_sanction(int $userId, int $adminId, string $status, string $reason = 'policy_violation', string $note = ''): void {
+    if (!db_table_exists('account_sanctions')) return;
+    $level = $status === 'banned' ? 'ban' : ($status === 'suspended' ? 'suspension' : 'warning');
+    q("UPDATE account_sanctions SET status = 'lifted', lifted_at = NOW() WHERE user_id = ? AND status = 'active'", [$userId]);
+    q("INSERT INTO account_sanctions (user_id, admin_id, level, reason, admin_note) VALUES (?,?,?,?,?)",
+      [$userId, $adminId, $level, $reason ?: 'policy_violation', $note ?: null]);
+}
+
+function lift_account_sanctions(int $userId, int $adminId, string $response = ''): void {
+    if (!db_table_exists('account_sanctions')) return;
+    q("UPDATE account_sanctions
+       SET status = 'lifted', lifted_at = NOW(), appeal_status = IF(appeal_status = 'pending', 'approved', appeal_status),
+           appeal_response = COALESCE(NULLIF(?, ''), appeal_response), reviewed_by = ?, reviewed_at = NOW()
+       WHERE user_id = ? AND status = 'active'", [$response, $adminId, $userId]);
+}
+
+function listing_rejection_reasons(): array {
+    return [
+        'title' => 'Title problem — use a clear item/service name, no emojis, contact details, or spam words.',
+        'category' => 'Wrong category — choose the most specific matching category so buyers can find it.',
+        'price' => 'Price problem — enter a realistic ETB price or mark the listing negotiable where allowed.',
+        'duplicate' => 'Duplicate listing — update your existing listing instead of reposting the same item.',
+        'images' => 'Image problem — upload clear original photos; avoid watermarks, screenshots, collages, or phone numbers in images.',
+        'description' => 'Description incomplete — add condition, dimensions, materials, delivery terms, and important details.',
+        'prohibited' => 'Not allowed — this item/service violates marketplace rules or needs admin approval.',
+        'contact_info' => 'Contact info in content — keep phone numbers and links in the seller profile/contact fields only.',
+        'other' => 'Other issue — read the reviewer note and correct the listing before resubmitting.',
+    ];
+}
+
+function listing_rejection_instruction(?string $reason): string {
+    $reasons = listing_rejection_reasons();
+    return $reasons[$reason ?: ''] ?? $reasons['other'];
+}
+
+function normalize_listing_title(string $title): string {
+    $title = mb_strtolower(trim($title));
+    $title = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $title) ?? $title;
+    $title = preg_replace('/\s+/u', ' ', $title) ?? $title;
+    return trim($title);
+}
+
+function contains_amharic(string $text): bool {
+    return (bool)preg_match('/[\x{1200}-\x{137F}]/u', $text);
+}
+
+function content_lang_attr(string $text): string {
+    return contains_amharic($text) ? ' lang="am"' : '';
+}
+
+function find_duplicate_listing(string $type, int $businessId, string $title, int $categoryId, string $city, ?int $excludeId = null): ?array {
+    if (!isset(LISTING_TABLES[$type])) return null;
+    $table = LISTING_TABLES[$type];
+    $titleCol = listing_title_col($type);
+    $norm = normalize_listing_title($title);
+    if ($norm === '') return null;
+
+    $params = [$businessId, $categoryId, $city];
+    $excludeSql = '';
+    if ($excludeId) {
+        $excludeSql = ' AND id != ?';
+        $params[] = $excludeId;
+    }
+
+    $rowsList = rows("SELECT id, `$titleCol` title, slug, status, city, category_id, created_at FROM `$table`
+        WHERE business_id = ? AND category_id = ? AND city = ? AND status NOT IN ('deleted','rejected','sold_out') $excludeSql
+        ORDER BY FIELD(status, 'active', 'pending_review', 'paused', 'expired'), updated_at DESC LIMIT 25", $params);
+
+    foreach ($rowsList as $candidate) {
+        if (normalize_listing_title($candidate['title']) === $norm) return $candidate;
+    }
+    return null;
+}
+
 function time_ago(string $dt): string {
     $diff = time() - strtotime($dt);
     if ($diff < 60) return 'just now';
@@ -32,9 +196,48 @@ function auth(): ?array {
 function is_vendor(?array $u): bool { return $u && in_array($u['account_type'], VENDOR_TYPES, true); }
 function is_admin(?array $u): bool { return $u && in_array($u['account_type'], ['admin', 'super_admin'], true); }
 
+function current_internal_path(): string {
+    $uri = (string)($_SERVER['REQUEST_URI'] ?? '/');
+    $path = parse_url($uri, PHP_URL_PATH) ?: '/';
+    $query = parse_url($uri, PHP_URL_QUERY);
+    $base = rtrim((string)BASE_URL, '/');
+    if ($base !== '') {
+        $basePath = parse_url($base, PHP_URL_PATH) ?: '';
+        if ($basePath !== '' && str_starts_with($path, $basePath . '/')) {
+            $path = substr($path, strlen($basePath));
+        } elseif ($basePath !== '' && $path === $basePath) {
+            $path = '/';
+        }
+    }
+    $internal = ltrim($path, '/');
+    return $internal . ($query ? '?' . $query : '');
+}
+
+function safe_return_path(?string $path, string $fallback = ''): string {
+    $path = trim((string)$path);
+    if ($path === '' || preg_match('/[\x00-\x1F\x7F]/', $path)) return $fallback;
+    if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $path) || str_starts_with($path, '//')) return $fallback;
+    $parts = parse_url($path);
+    if ($parts === false || isset($parts['scheme']) || isset($parts['host'])) return $fallback;
+    $cleanPath = ltrim((string)($parts['path'] ?? ''), '/');
+    $first = explode('/', $cleanPath, 2)[0] ?? '';
+    if (in_array($first, ['login', 'logout', 'register', 'forgot-password'], true)) return $fallback;
+    $query = isset($parts['query']) && $parts['query'] !== '' ? '?' . $parts['query'] : '';
+    return $cleanPath . $query;
+}
+
+function default_post_login_path(array $u): string {
+    return is_admin($u) ? 'admin' : (is_vendor($u) ? 'vendor' : 'account');
+}
+
 function require_login(): array {
     $u = auth();
-    if (!$u) { flash('Please log in first.', 'error'); redirect('login'); }
+    if (!$u) {
+        $returnTo = safe_return_path(current_internal_path(), '');
+        if ($returnTo !== '') $_SESSION['return_to'] = $returnTo;
+        flash('Please log in first.', 'error');
+        redirect('login' . ($returnTo !== '' ? '?return=' . rawurlencode($returnTo) : ''));
+    }
     return $u;
 }
 function require_vendor(): array {
@@ -53,6 +256,20 @@ function my_business(?array $u = null): ?array {
     $u = $u ?? auth();
     if (!$u) return null;
     return row("SELECT * FROM businesses WHERE user_id = ? AND status != 'deleted'", [$u['id']]);
+}
+
+// ---------- JSON API envelope (shared by the bearer-token /api and session-cookie /api/v1) ----------
+function api_out($data, int $code = 200): never {
+    header('Content-Type: application/json; charset=utf-8');
+    http_response_code($code);
+    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+function api_error(string $msg, int $code = 400, array $extra = []): never {
+    api_out(['ok' => false, 'error' => $msg] + $extra, $code);
+}
+function api_validation_error(array $fieldErrors, string $msg = 'Validation failed.'): never {
+    api_error($msg, 422, ['fields' => $fieldErrors]);
 }
 
 // ---------- flash + csrf ----------
@@ -80,6 +297,12 @@ function upload_limit_bytes(): int {
     return upload_limit_mb() * 1024 * 1024;
 }
 
+function upload_rate_exceeded(string $kind = 'file'): bool {
+    $max = (int)sys('limits.upload_rate_max', 30);
+    $window = (int)sys('limits.upload_rate_window_min', 60) * 60;
+    return rate_limited('upload_' . $kind, $max, $window);
+}
+
 function slugify(string $text, string $table, string $col = 'slug'): string {
     $slug = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text) ?: $text), '-'));
     if ($slug === '') $slug = 'item';
@@ -90,6 +313,10 @@ function slugify(string $text, string $table, string $col = 'slug'): string {
 
 function upload_image(array $file, string $subdir): ?string {
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
+    if (upload_rate_exceeded('image')) {
+        flash('Too many upload attempts. Please wait a while before uploading more files.', 'error');
+        return null;
+    }
     if ($file['error'] !== UPLOAD_ERR_OK) {
         $msg = in_array($file['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
             ? 'Image upload failed because it exceeds the server upload limit.'
@@ -157,10 +384,92 @@ function image_optimize(string $absPath, string $ext): void {
 
 function img_url(?string $path): ?string { return $path ? UPLOAD_URL . '/' . $path : null; }
 
+/** Delete an uploaded file and its .thumb.jpg companion from disk. Used by the retention cron
+ * to purge verification documents and payment proofs past their retention window — the DB row
+ * (decision/record) is kept, only the file content goes. Path-traversal guarded even though
+ * callers only ever pass paths this app itself generated via upload_image(). */
+function purge_upload_file(?string $relPath): void {
+    if (!$relPath) return;
+    $abs = UPLOAD_DIR . '/' . $relPath;
+    $real = realpath($abs);
+    if ($real === false || !str_starts_with($real, realpath(UPLOAD_DIR))) return;
+    @unlink($real);
+    @unlink($real . '.thumb.jpg');
+}
+
 /** Thumbnail URL when one exists, else the full image. */
 function thumb_url(?string $path): ?string {
     if (!$path) return null;
     return file_exists(UPLOAD_DIR . '/' . $path . '.thumb.jpg') ? UPLOAD_URL . '/' . $path . '.thumb.jpg' : img_url($path);
+}
+
+function request_scheme(): string {
+    $forwarded = strtolower(trim(explode(',', $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')[0]));
+    if ($forwarded === 'https') return 'https';
+    if (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') return 'https';
+    return $forwarded === 'http' ? 'http' : 'https';
+}
+
+function absolute_url(?string $path): ?string {
+    if (!$path) return null;
+    if (filter_var($path, FILTER_VALIDATE_URL)) return $path;
+    $host = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $host = trim(explode(',', (string)$host)[0]);
+    return request_scheme() . '://' . $host . '/' . ltrim($path, '/');
+}
+
+// Default canonical: the current request path with BASE_URL and any query string
+// stripped. Pages with faceted/filtered variants (browse.php) should override by
+// setting $canonical before including layout_top.php, so filter combinations don't
+// count as duplicate content against the clean category URL.
+function default_canonical_path(): string {
+    $path = (string)parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+    $basePath = trim((string)parse_url(BASE_URL, PHP_URL_PATH), '/');
+    $path = trim($path, '/');
+    if ($basePath !== '' && str_starts_with($path, $basePath)) {
+        $path = trim(substr($path, strlen($basePath)), '/');
+    }
+    return $path;
+}
+
+function remote_url_allowed(string $url, array $allowedHosts = []): bool {
+    $parts = parse_url($url);
+    if (!$parts || strtolower($parts['scheme'] ?? '') !== 'https' || empty($parts['host'])) return false;
+    $host = strtolower($parts['host']);
+    if ($allowedHosts && !in_array($host, array_map('strtolower', $allowedHosts), true)) return false;
+
+    $ips = [];
+    foreach (@dns_get_record($host, DNS_A + DNS_AAAA) ?: [] as $record) {
+        if (!empty($record['ip'])) $ips[] = $record['ip'];
+        if (!empty($record['ipv6'])) $ips[] = $record['ipv6'];
+    }
+    if (!$ips) $ips = gethostbynamel($host) ?: [];
+    if (!$ips) return false;
+    foreach ($ips as $ip) {
+        if (is_private_ip($ip)) return false;
+    }
+    return true;
+}
+
+function remote_text(string $url, array $allowedHosts = [], int $timeout = 10): ?string {
+    if (!remote_url_allowed($url, $allowedHosts)) return null;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_CONNECTTIMEOUT => min(4, $timeout),
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 EzihGebeya',
+        ]);
+        $body = curl_exec($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        return $status >= 200 && $status < 300 && is_string($body) ? $body : null;
+    }
+    if (!ini_get('allow_url_fopen')) return null;
+    $body = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => $timeout]]));
+    return is_string($body) ? $body : null;
 }
 
 // ---------- video embeds (official embeds only per spec) ----------
@@ -200,50 +509,48 @@ function tiktok_oembed_video_id(string $url): ?string {
 }
 
 function fetch_remote_text(string $url): ?string {
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 4,
-            CURLOPT_CONNECTTIMEOUT => 4,
-            CURLOPT_TIMEOUT => 10,
-            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 EzihGebeya',
-        ]);
-        $body = curl_exec($ch);
-        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
-        return $status >= 200 && $status < 300 && is_string($body) ? $body : null;
-    }
-    $body = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 10]]));
-    return is_string($body) ? $body : null;
+    return remote_text($url, ['www.tiktok.com']);
 }
 
 function resolve_redirect_url(string $url): ?string {
-    if (!filter_var($url, FILTER_VALIDATE_URL)) return null;
-    if (function_exists('curl_init')) {
-        foreach ([true, false] as $headOnly) {
+    $allowed = ['vt.tiktok.com', 'vm.tiktok.com', 'www.tiktok.com', 'm.tiktok.com'];
+    if (!remote_url_allowed($url, $allowed)) return null;
+
+    for ($i = 0; $i < 8; $i++) {
+        if (function_exists('curl_init')) {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_MAXREDIRS => 8,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_HEADER => true,
+                CURLOPT_NOBODY => true,
                 CURLOPT_CONNECTTIMEOUT => 4,
                 CURLOPT_TIMEOUT => 10,
-                CURLOPT_NOBODY => $headOnly,
                 CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 EzihGebeya',
                 CURLOPT_HTTPHEADER => ['Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
             ]);
-            curl_exec($ch);
-            $effective = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+            $response = curl_exec($ch);
+            $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             curl_close($ch);
-            if ($effective && $effective !== $url) return $effective;
+            if (!is_string($response) || $status < 300 || $status >= 400) return $url;
+            if (!preg_match('/^Location:\s*(.+)$/mi', $response, $m)) return $url;
+            $next = trim($m[1]);
+        } else {
+            $context = stream_context_create(['http' => ['method' => 'HEAD', 'follow_location' => 0, 'timeout' => 10]]);
+            $headers = @get_headers($url, true, $context);
+            if (!is_array($headers) || empty($headers['Location'])) return $url;
+            $next = is_array($headers['Location']) ? end($headers['Location']) : $headers['Location'];
         }
+        if (!is_string($next) || $next === '') return $url;
+        if (str_starts_with($next, '/')) {
+            $parts = parse_url($url);
+            $next = ($parts['scheme'] ?? 'https') . '://' . ($parts['host'] ?? '') . $next;
+        }
+        if (!remote_url_allowed($next, $allowed)) return null;
+        if ($next === $url) return $url;
+        $url = $next;
     }
-    $headers = @get_headers($url, true);
-    if (!is_array($headers) || empty($headers['Location'])) return null;
-    $location = is_array($headers['Location']) ? end($headers['Location']) : $headers['Location'];
-    return is_string($location) ? $location : null;
+    return $url;
 }
 
 function video_embed_html(array $v): string {
@@ -318,6 +625,66 @@ function business_response_rate(int $businessId): ?int {
     return (int)round((int)$agg['handled'] / (int)$agg['total'] * 100);
 }
 
+function business_response_median_minutes(int $businessId): ?int {
+    static $cache = [];
+    if (array_key_exists($businessId, $cache)) return $cache[$businessId];
+    if (!db_table_exists('inquiry_messages')) return $cache[$businessId] = null;
+    $biz = row("SELECT user_id FROM businesses WHERE id = ?", [$businessId]);
+    if (!$biz) return $cache[$businessId] = null;
+    $rows = rows(
+        "SELECT TIMESTAMPDIFF(MINUTE, i.created_at, MIN(m.created_at)) mins
+         FROM inquiries i
+         JOIN inquiry_messages m ON m.inquiry_id = i.id AND m.sender_id = ?
+         WHERE i.business_id = ? AND m.created_at >= i.created_at
+         GROUP BY i.id
+         HAVING mins IS NOT NULL
+         ORDER BY mins",
+        [$biz['user_id'], $businessId]
+    );
+    if (count($rows) < 3) return $cache[$businessId] = null;
+    $mins = array_map(fn($r) => max(0, (int)$r['mins']), $rows);
+    sort($mins);
+    $mid = (int)floor((count($mins) - 1) / 2);
+    return $cache[$businessId] = (count($mins) % 2 ? $mins[$mid] : (int)round(($mins[$mid] + $mins[$mid + 1]) / 2));
+}
+
+function response_time_label(?int $minutes): ?string {
+    if ($minutes === null) return null;
+    if ($minutes < 60) return $minutes <= 1 ? 'usually replies in 1 min' : 'usually replies in ' . $minutes . ' mins';
+    if ($minutes < 1440) return 'usually replies in ' . max(1, (int)round($minutes / 60)) . ' hrs';
+    return 'usually replies in ' . max(1, (int)round($minutes / 1440)) . ' days';
+}
+
+function business_recent_activity_label(int $businessId): ?string {
+    static $cache = [];
+    if (array_key_exists($businessId, $cache)) return $cache[$businessId];
+    $biz = row("SELECT user_id FROM businesses WHERE id = ?", [$businessId]);
+    if (!$biz) return $cache[$businessId] = null;
+    $last = val("SELECT last_login_at FROM users WHERE id = ?", [$biz['user_id']]);
+    foreach (LISTING_TABLES as $table) {
+        $d = val("SELECT MAX(updated_at) FROM `$table` WHERE business_id = ?", [$businessId]);
+        if ($d && (!$last || strtotime($d) > strtotime($last))) $last = $d;
+    }
+    if (db_table_exists('video_posts')) {
+        $d = val("SELECT MAX(updated_at) FROM video_posts WHERE business_id = ?", [$businessId]);
+        if ($d && (!$last || strtotime($d) > strtotime($last))) $last = $d;
+    }
+    if (!$last) return $cache[$businessId] = null;
+    $age = time() - strtotime($last);
+    if ($age <= 86400) return $cache[$businessId] = 'active today';
+    if ($age <= 7 * 86400) return $cache[$businessId] = 'active this week';
+    return $cache[$businessId] = null;
+}
+
+function business_trust_snapshot(int $businessId): array {
+    static $cache = [];
+    if (!$businessId) return [];
+    if (!array_key_exists($businessId, $cache)) {
+        $cache[$businessId] = row("SELECT rating_average, rating_count, created_at FROM businesses WHERE id = ?", [$businessId]) ?: [];
+    }
+    return $cache[$businessId];
+}
+
 function star_rating($avg, int $count = -1): string {
     $avg = (float)$avg;
     if ($avg <= 0) return '<span class="stars muted">No ratings yet</span>';
@@ -386,14 +753,14 @@ function sanitize_system_restrictions(array $in): array {
 
 function system_ui_defaults(): array {
     return [
-        'brand' => '#0f766e',
-        'brand_dark' => '#115e59',
-        'brand_soft' => '#d9f4ef',
-        'accent' => '#f97316',
-        'accent_soft' => '#fff1e7',
-        'ink' => '#101828',
-        'text' => '#1f2937',
-        'bg' => '#f6f8fb',
+        'brand' => '#2563eb',
+        'brand_dark' => '#1d4ed8',
+        'brand_soft' => '#eff6ff',
+        'accent' => '#d97706',
+        'accent_soft' => '#fef3c7',
+        'ink' => '#0f172a',
+        'text' => '#334155',
+        'bg' => '#f8fafc',
         'surface' => '#ffffff',
         'theme_mode' => 'light',
         'font_family' => 'inter',
@@ -407,9 +774,9 @@ function system_ui_defaults(): array {
         'announcement_text' => 'New sellers can open a shop for free.',
         'announcement_url' => '',
         'announcement_tone' => 'brand',
-        'button_radius' => 999,
-        'card_radius' => 14,
-        'panel_radius' => 14,
+        'button_radius' => 10,
+        'card_radius' => 16,
+        'panel_radius' => 16,
         'input_radius' => 10,
         'card_image_ratio' => '4/3',
         'shadow_strength' => 45,
@@ -454,8 +821,8 @@ function system_ui_defaults(): array {
         'button_badge_tone' => 'accent',
         'hero_overlay' => 72,
         'hero_background_mode' => 'overlay_image',
-        'hero_gradient_from' => '#111827',
-        'hero_gradient_to' => '#0f766e',
+        'hero_gradient_from' => '#0f172a',
+        'hero_gradient_to' => '#1d4ed8',
         'hero_image_position' => 'center',
         'hero_title' => 'Furniture, finishing and supplies in one trusted marketplace.',
         'hero_subtitle' => 'Discover verified furniture sellers, finishing professionals and material suppliers across Ethiopia by location, price and rating.',
@@ -587,26 +954,42 @@ function system_ui_icon(string $name, string $label = ''): string {
     }
 
     $paths = [
-        'home' => '<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10.5V20h5v-5h4v5h5v-9.5"/>',
-        'shop' => '<path d="M4 10h16l-1-5H5l-1 5Z"/><path d="M6 10v10h12V10"/><path d="M9 20v-6h6v6"/>',
-        'cart' => '<path d="M4 5h2l2 10h9l2-7H7"/><circle cx="10" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>',
-        'play' => '<path d="M8 5v14l11-7-11-7Z"/>',
-        'user' => '<circle cx="12" cy="8" r="4"/><path d="M4 20c1.8-4 14.2-4 16 0"/>',
-        'admin' => '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z"/><path d="M9 12l2 2 4-5"/>',
-        'furniture' => '<path d="M5 12V8c0-1.7 1.3-3 3-3h8c1.7 0 3 1.3 3 3v4"/><path d="M4 12h16v6H4z"/><path d="M6 18v2M18 18v2"/>',
-        'services' => '<path d="M14.5 5.5 18 9l-9 9H5.5v-3.5l9-9Z"/><path d="M13 7l4 4"/>',
-        'supplies' => '<path d="M4 8 12 4l8 4-8 4-8-4Z"/><path d="M4 8v8l8 4 8-4V8"/><path d="M12 12v8"/>',
-        'pin' => '<path d="M12 21s7-5.3 7-11a7 7 0 0 0-14 0c0 5.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/>',
-        'search' => '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
-        'video' => '<path d="M5 6h10v12H5z"/><path d="m15 10 5-3v10l-5-3"/>',
-        'overview' => '<path d="M4 13h6V4H4zM14 20h6V4h-6zM4 20h6v-3H4z"/>',
-        'business' => '<path d="M4 20h16V8L12 4 4 8v12Z"/><path d="M9 20v-6h6v6"/><path d="M8 10h.01M12 10h.01M16 10h.01"/>',
-        'orders' => '<path d="M7 4h10l2 4v12H5V8l2-4Z"/><path d="M5 8h14"/><path d="M9 13h6M9 16h4"/>',
-        'analytics' => '<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l3-4 3 2 4-7"/>',
-        'messages' => '<path d="M4 5h16v11H8l-4 4V5Z"/><path d="M8 9h8M8 12h5"/>',
-        'subscription' => '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.1L12 17.2 6.4 20.1 7.5 14 3 9.6l6.2-.9L12 3Z"/>',
-        'ads' => '<path d="M4 14h3l9-5V5l4 2v10l-4 2v-4l-9-5H4v4Z"/><path d="M7 14v5"/>',
-        'category' => '<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>',
+        'home' => '<path d="M3 10.8 12 3.5l9 7.3"/><path d="M5 9.8V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.8"/>',
+        'shop' => '<path d="M3 9.5 5 4h14l2 5.5"/><path d="M3 9.5a2.6 2.6 0 0 0 5.2 0 2.6 2.6 0 0 0 5.2 0 2.6 2.6 0 0 0 5.2 0 2.6 2.6 0 0 0 2.4 0"/><path d="M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8"/><path d="M9 21v-6h6v6"/>',
+        'cart' => '<circle cx="9" cy="20" r="1.4"/><circle cx="17.5" cy="20" r="1.4"/><path d="M2.5 3.5h2l2.6 12.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.2L20.5 8H6"/>',
+        'play' => '<path d="M7 4.8a1 1 0 0 1 1.5-.86l11 6.2a1 1 0 0 1 0 1.73l-11 6.2A1 1 0 0 1 7 17.2V4.8Z"/>',
+        'user' => '<circle cx="12" cy="7.5" r="3.8"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+        'admin' => '<path d="M12 2.8 4.5 5.6v5.6c0 4.7 3.2 7.8 7.5 9 4.3-1.2 7.5-4.3 7.5-9V5.6L12 2.8Z"/><path d="m8.8 11.8 2.2 2.2 4.2-4.6"/>',
+        'furniture' => '<path d="M5.5 11V7.5A2.5 2.5 0 0 1 8 5h8a2.5 2.5 0 0 1 2.5 2.5V11"/><path d="M3.5 13.5a2 2 0 0 1 4 0V14h9v-.5a2 2 0 0 1 4 0V17a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17v-3.5Z"/><path d="M6 18.5V21M18 18.5V21"/>',
+        'sofa' => '<path d="M5.5 11V7.5A2.5 2.5 0 0 1 8 5h8a2.5 2.5 0 0 1 2.5 2.5V11"/><path d="M3.5 13.5a2 2 0 0 1 4 0V14h9v-.5a2 2 0 0 1 4 0V17a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17v-3.5Z"/><path d="M6 18.5V21M18 18.5V21"/>',
+        'bed' => '<path d="M3 19v-8.5A1.5 1.5 0 0 1 4.5 9H8a3 3 0 0 1 3 3h9.5"/><path d="M3 13h18v6"/><path d="M3 21v-2M21 21v-2"/><path d="M5.5 9V6.5A1.5 1.5 0 0 1 7 5h10a1.5 1.5 0 0 1 1.5 1.5V11"/>',
+        'table' => '<path d="M3 8h18"/><path d="M5 8l-.8 12M19 8l.8 12"/><path d="M7.5 13h9"/>',
+        'chair' => '<path d="M7 11V4.5A1.5 1.5 0 0 1 8.5 3h7A1.5 1.5 0 0 1 17 4.5V11"/><path d="M5.5 14a1.8 1.8 0 0 1 1.8-1.8h9.4a1.8 1.8 0 0 1 1.8 1.8V16H5.5v-2Z"/><path d="M6.5 16v5M17.5 16v5"/>',
+        'cabinet' => '<rect x="4" y="3.5" width="16" height="17" rx="1.5"/><path d="M12 3.5v17"/><path d="M9.5 11v2.5M14.5 11v2.5"/>',
+        'wardrobe' => '<rect x="5" y="3" width="14" height="16" rx="1.5"/><path d="M12 3v16"/><path d="M9.8 10v2M14.2 10v2"/><path d="M7 19v2M17 19v2"/>',
+        'tv' => '<rect x="3" y="5" width="18" height="11" rx="1.5"/><path d="M8 19h8"/><path d="M12 16v3"/>',
+        'lamp' => '<path d="M8 2.5h8l3 8H5l3-8Z"/><path d="M12 10.5V19"/><path d="M8.5 21.5h7"/>',
+        'office' => '<path d="M7 4h10v7H7z"/><path d="M4 11h16v3H4z"/><path d="M6 14l-1 7M18 14l1 7"/><path d="M12 14v7"/>',
+        'services' => '<path d="M14.7 6.3a4.5 4.5 0 0 0-6 5.6L3 17.6a2 2 0 1 0 2.8 2.8l5.7-5.7a4.5 4.5 0 0 0 5.6-6l-3 3-2.5-.7-.7-2.5 3-3-.2-.2Z"/>',
+        'supplies' => '<path d="M12 2.8 3.5 7v10l8.5 4.2L20.5 17V7L12 2.8Z"/><path d="M3.5 7 12 11.2 20.5 7"/><path d="M12 11.2V21.2"/>',
+        'pin' => '<path d="M12 21.5s7.5-5.6 7.5-11.5a7.5 7.5 0 0 0-15 0c0 5.9 7.5 11.5 7.5 11.5Z"/><circle cx="12" cy="10" r="2.8"/>',
+        'search' => '<circle cx="11" cy="11" r="6.5"/><path d="m15.8 15.8 4.7 4.7"/>',
+        'video' => '<rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/>',
+        'overview' => '<rect x="3.5" y="3.5" width="7" height="9.5" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="5.5" rx="1.2"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.2"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.2"/>',
+        'business' => '<path d="M4 21h16"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9.5 21v-5h5v5"/><path d="M9 10h.01M12 10h.01M15 10h.01M9 13h.01M12 13h.01M15 13h.01"/>',
+        'orders' => '<path d="M15.5 2.5H8.5A1.5 1.5 0 0 0 7 4v16a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 19 20V6l-3.5-3.5Z"/><path d="M15 2.5V6h3.5"/><path d="M10 12h6M10 15.5h4"/>',
+        'analytics' => '<path d="M3.5 3.5v15A1.5 1.5 0 0 0 5 20h15.5"/><path d="m7 14 3.5-4.5 3 2.5 4.5-6"/>',
+        'messages' => '<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.5-.7L3 20.5l1.3-5.2A8.4 8.4 0 1 1 21 11.5Z"/><path d="M8.5 10h7M8.5 13.2h4.5"/>',
+        'subscription' => '<path d="m12 2.8 2.9 5.8 6.4 1-4.6 4.5 1 6.4L12 17.5l-5.7 3-1-6.4L.7 9.6l6.4-1L12 2.8Z"/>',
+        'ads' => '<path d="M11 6.5 4 9v5l7 2.5V6.5Z"/><path d="M11 6.5 19.5 3v17L11 16.5"/><path d="M5.5 14.5 6.5 20"/>',
+        'category' => '<rect x="3.5" y="3.5" width="7.2" height="7.2" rx="1.6"/><rect x="13.3" y="3.5" width="7.2" height="7.2" rx="1.6"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="1.6"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="1.6"/>',
+        'bell' => '<path d="M18 8.5a6 6 0 1 0-12 0c0 6.3-2.5 8-2.5 8h17s-2.5-1.7-2.5-8Z"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0"/>',
+        'heart' => '<path d="M12 20.5s-8.5-5-8.5-11A4.6 4.6 0 0 1 12 6.6a4.6 4.6 0 0 1 8.5 2.9c0 6-8.5 11-8.5 11Z"/>',
+        'star' => '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9L12 3Z"/>',
+        'verified' => '<path d="M12 2.5 14.2 4.6l3-.4 1 2.9 2.8 1.2-.6 3 1.9 2.4-1.9 2.4.6 3-2.8 1.2-1 2.9-3-.4L12 21.5l-2.2-2.1-3 .4-1-2.9L3 15.7l.6-3L1.7 10.3l1.9-2.4-.6-3L5.8 3.7l1-2.9 3 .4L12 2.5Z"/><path d="m8.8 12 2.2 2.2 4.2-4.6"/>',
+        'truck' => '<path d="M2.5 5.5h11.5V17H2.5z"/><path d="M14 9h4l3 3.5V17h-7"/><circle cx="6.5" cy="17.5" r="1.8"/><circle cx="17.5" cy="17.5" r="1.8"/>',
+        'phone' => '<path d="M20.5 16.9v2.6a1.7 1.7 0 0 1-1.9 1.7 17.3 17.3 0 0 1-7.5-2.7 17 17 0 0 1-5.2-5.2A17.3 17.3 0 0 1 3.2 5.7 1.7 1.7 0 0 1 4.9 3.8h2.6a1.7 1.7 0 0 1 1.7 1.5c.1.8.3 1.7.6 2.5a1.7 1.7 0 0 1-.4 1.8l-1.1 1.1a13.6 13.6 0 0 0 4.9 4.9l1.1-1.1a1.7 1.7 0 0 1 1.8-.4c.8.3 1.7.5 2.5.6a1.7 1.7 0 0 1 1.5 1.7Z"/>',
+        'settings' => '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1Z"/>',
     ];
     $body = $paths[$name] ?? $paths['category'];
     $class = $pack === 'solid' ? 'ui-icon ui-icon-solid' : 'ui-icon ui-icon-line';
@@ -615,9 +998,25 @@ function system_ui_icon(string $name, string $label = ''): string {
 
 function system_ui_category_icon(string $categoryName, string $type = 'product'): string {
     $name = strtolower($categoryName);
-    if (str_contains($name, 'sofa') || str_contains($name, 'chair') || str_contains($name, 'bed') || str_contains($name, 'table') || str_contains($name, 'furniture')) return system_ui_icon('furniture', $categoryName);
-    if (str_contains($name, 'service') || str_contains($name, 'design') || str_contains($name, 'work') || str_contains($name, 'install') || str_contains($name, 'paint')) return system_ui_icon('services', $categoryName);
-    if ($type === 'supply' || str_contains($name, 'wood') || str_contains($name, 'board') || str_contains($name, 'paint') || str_contains($name, 'tool')) return system_ui_icon('supplies', $categoryName);
+    $map = [
+        'sofa' => 'sofa', 'couch' => 'sofa', 'seat' => 'sofa',
+        'bed' => 'bed', 'mattress' => 'bed',
+        'dining' => 'table', 'table' => 'table', 'desk' => 'table',
+        'chair' => 'chair', 'stool' => 'chair',
+        'office' => 'office',
+        'kitchen' => 'cabinet', 'cabinet' => 'cabinet',
+        'wardrobe' => 'wardrobe', 'closet' => 'wardrobe',
+        'tv' => 'tv', 'stand' => 'tv',
+        'lamp' => 'lamp', 'light' => 'lamp',
+        'service' => 'services', 'design' => 'services', 'install' => 'services', 'finish' => 'services', 'paint' => 'services', 'repair' => 'services',
+        'wood' => 'supplies', 'board' => 'supplies', 'tool' => 'supplies', 'material' => 'supplies', 'fabric' => 'supplies', 'foam' => 'supplies',
+    ];
+    foreach ($map as $needle => $icon) {
+        if (str_contains($name, $needle)) return system_ui_icon($icon, $categoryName);
+    }
+    if ($type === 'supply') return system_ui_icon('supplies', $categoryName);
+    if ($type === 'service') return system_ui_icon('services', $categoryName);
+    if ($type === 'product') return system_ui_icon('furniture', $categoryName);
     return system_ui_icon('category', $categoryName);
 }
 
@@ -642,7 +1041,7 @@ function system_ui_style_tag(): string {
         if ($heroMode === 'image') {
             $heroBackground = "url(\"" . e($safeHero) . "\") {$heroPosition}/cover no-repeat";
         } elseif ($heroMode === 'overlay_image') {
-            $heroBackground = "linear-gradient(115deg,rgba(2,6,23,{$overlay}),rgba(15,118,110," . max(0.2, $overlay - 0.16) . ")),url(\"" . e($safeHero) . "\") {$heroPosition}/cover no-repeat";
+            $heroBackground = "linear-gradient(115deg,rgba(2,6,23,{$overlay}),rgba(29,78,216," . max(0.2, $overlay - 0.16) . ")),url(\"" . e($safeHero) . "\") {$heroPosition}/cover no-repeat";
         }
     }
     $fontStack = [
@@ -704,7 +1103,7 @@ function system_ui_style_tag(): string {
     if ($ui['search_style'] === 'box') $css .= ".header-search input,.header-search button{border-radius:12px}.hero-search,.hero-search input,.hero-search select,.hero-search .btn{border-radius:12px}";
     if ($ui['search_style'] === 'underline') $css .= ".header-search input{border-width:0 0 2px 0;border-radius:0;background:transparent}.header-search button{border-radius:10px}.header-search::before,.header-search::after{display:none}";
     if ($ui['hero_align'] === 'center') $css .= ".hero{text-align:center}.hero p,.hero-search{margin-left:auto;margin-right:auto}.hero-links,.hero-stats{justify-content:center}";
-    if ($ui['hero_align'] === 'split') $css .= ".hero .container{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.65fr);gap:28px;align-items:center}.hero .container::after{content:'';min-height:260px;border-radius:var(--r-lg);background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.2);box-shadow:var(--shadow)}@media(max-width:760px){.hero .container{display:block}.hero .container::after{display:none}}";
+    if ($ui['hero_align'] === 'split') $css .= ".hero .container{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.65fr);gap:28px;align-items:center}.hero .container::after{content:'';min-height:260px;border-radius:var(--r-lg);background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.2);box-shadow:var(--shadow)}@media(max-width:600px){.hero .container{display:block}.hero .container::after{display:none}}";
     if ($ui['hero_height'] === 'compact') $css .= ".hero{padding-top:42px;padding-bottom:34px}.hero h1{font-size:clamp(1.8rem,4vw,2.7rem)}";
     if ($ui['hero_height'] === 'tall') $css .= ".hero{padding-top:104px;padding-bottom:92px}";
     if ($ui['category_style'] === 'minimal') $css .= ".cat-tile{box-shadow:none;background:transparent}.cat-icon{display:none}";
@@ -770,19 +1169,15 @@ function ip_geolocate(): ?array {
     if (is_private_ip($ip)) return null; // localhost/LAN — nothing a public IP API can resolve
 
     $url = IP_GEO_API . rawurlencode($ip) . '?fields=status,lat,lon,city';
-    $json = null;
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 2, CURLOPT_TIMEOUT => 3]);
-        $json = curl_exec($ch);
-        curl_close($ch);
-    } elseif (ini_get('allow_url_fopen')) {
-        $json = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 3]]));
-    }
+    $host = parse_url(IP_GEO_API, PHP_URL_HOST);
+    $json = $host ? remote_text($url, [$host], 3) : null;
     if (!$json) return null;
     $data = json_decode($json, true);
-    if (!$data || ($data['status'] ?? '') !== 'success' || !isset($data['lat'], $data['lon'])) return null;
-    return ['lat' => (float)$data['lat'], 'lng' => (float)$data['lon']];
+    if (!$data) return null;
+    $lat = $data['lat'] ?? $data['latitude'] ?? null;
+    $lng = $data['lon'] ?? $data['lng'] ?? $data['longitude'] ?? null;
+    if (($data['status'] ?? 'success') !== 'success' || $lat === null || $lng === null) return null;
+    return ['lat' => (float)$lat, 'lng' => (float)$lng];
 }
 
 /** Current visitor location: session (fast) → cookie (returning visit) → IP lookup (once) → default city. */
@@ -912,16 +1307,57 @@ function promotion_apply(array $p, bool $on): void {
     }
 }
 
+function promotion_target_ready(array $p): bool {
+    if (($p['promotable_type'] ?? '') === 'business') {
+        return (bool)val("SELECT COUNT(*) FROM businesses WHERE id = ? AND status = 'active'", [$p['promotable_id']]);
+    }
+    if (($p['promotable_type'] ?? '') === 'video') {
+        return (bool)val("SELECT COUNT(*) FROM video_posts WHERE id = ? AND status = 'approved'", [$p['promotable_id']]);
+    }
+    if (isset(LISTING_TABLES[$p['promotable_type'] ?? ''])) {
+        $t = LISTING_TABLES[$p['promotable_type']];
+        return (bool)val("SELECT COUNT(*) FROM `$t` WHERE id = ? AND status = 'active'", [$p['promotable_id']]);
+    }
+    return false;
+}
+
+function promotion_activate(array $p, ?string $startsAt = null): bool {
+    if (!promotion_target_ready($p)) return false;
+    $startsAt = $startsAt ?: date('Y-m-d H:i:s');
+    q("UPDATE promotions SET status = 'active', starts_at = ?, ends_at = DATE_ADD(?, INTERVAL duration_weeks WEEK) WHERE id = ?",
+      [$startsAt, $startsAt, $p['id']]);
+    $fresh = row("SELECT * FROM promotions WHERE id = ?", [$p['id']]);
+    if ($fresh) promotion_apply($fresh, true);
+    return true;
+}
+
 function order_number(): string {
     return 'EG' . date('ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
 }
 
 function upload_model(array $file, string $ext): ?string {
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
+    if (upload_rate_exceeded('model')) {
+        flash('Too many upload attempts. Please wait a while before uploading more files.', 'error');
+        return null;
+    }
     if ($file['error'] !== UPLOAD_ERR_OK) { flash('3D model upload failed.', 'error'); return null; }
     $maxMb = (int)sys('limits.ar_model_max_mb', 10);
     if ($file['size'] > $maxMb * 1024 * 1024) { flash("3D model too large (max $maxMb MB).", 'error'); return null; }
     if (strtolower(pathinfo($file['name'], PATHINFO_EXTENSION)) !== $ext) { flash("Model must be a .$ext file.", 'error'); return null; }
+    // Content-sniff the actual bytes rather than trusting the client-supplied filename/extension alone.
+    // .glb (glTF Binary) always starts with the 4-byte magic "glTF"; .usdz is a zip container and
+    // always starts with a standard ZIP local-file-header signature. This rejects arbitrary content
+    // (e.g. an HTML/script payload renamed to .glb) that would otherwise be stored and, since Apache
+    // has no MIME mapping for these extensions and sends no Content-Type, could be sniffed and
+    // rendered as HTML by a browser that opens the file directly — a stored-XSS vector.
+    $head = @file_get_contents($file['tmp_name'], false, null, 0, 8);
+    $validMagic = match ($ext) {
+        'glb' => substr((string)$head, 0, 4) === 'glTF',
+        'usdz' => in_array(substr((string)$head, 0, 4), ["PK\x03\x04", "PK\x05\x06", "PK\x07\x08"], true),
+        default => false,
+    };
+    if (!$validMagic) { flash("File does not look like a valid .$ext model.", 'error'); return null; }
     $dir = UPLOAD_DIR . '/ar-models';
     if (!is_dir($dir)) mkdir($dir, 0775, true);
     $name = 'ar-models/' . bin2hex(random_bytes(10)) . '.' . $ext;

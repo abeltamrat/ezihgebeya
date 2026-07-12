@@ -1,0 +1,13 @@
+Options -ExecCGI
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8
+RemoveType .php .phtml .php3 .php4 .php5 .php7 .php8
+<FilesMatch "\.(?:php|phtml|php[0-9])$">
+    Require all denied
+</FilesMatch>
+
+# Prevent browsers from MIME-sniffing uploaded files (e.g. content served with no/generic
+# Content-Type for extensions Apache doesn't recognize, like .glb/.usdz) into an executable
+# type such as text/html.
+<IfModule mod_headers.c>
+Header always set X-Content-Type-Options "nosniff"
+</IfModule>

@@ -29,3 +29,6 @@ backups/
 uploads/payments/
 uploads/ui/
 uploads/ar-models/
+
+# Generated file cache (app/cache.php) — regenerated on demand
+storage/cache/*.json

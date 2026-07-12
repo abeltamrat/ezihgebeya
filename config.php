@@ -1,18 +1,24 @@
 <?php
 // EzihGebeya configuration
+require_once __DIR__ . '/app/env.php';
+load_env(__DIR__ . '/.env'); // gitignored — see .env.example for the variables this reads
+
 define('SITE_NAME', 'EzihGebeya');
 define('SITE_TAGLINE', 'Ethiopia\'s Furniture, Finishing & Supplies Marketplace');
 $host = $_SERVER['HTTP_HOST'] ?? '';
-define('BASE_URL', getenv('APP_BASE_URL') ?: ($host === 'ezihgebeya.nonstopplc.com' ? '' : '/ezihgebeya'));
+define('BASE_URL', getenv('APP_BASE_URL') ?: (($host === 'ezihgebeya.nonstopplc.com' || str_contains($host, 'localhost')) ? '' : '/ezihgebeya'));
 
-define('DB_HOST', '127.0.0.1');
-define('DB_NAME', 'nonstopp_ezihgebeya');
-define('DB_USER', 'root');
-define('DB_PASS', '');
+// Local defaults match the existing XAMPP dev setup; production sets these via
+// the hosting panel's environment variables or a private .env file (never committed).
+define('DB_HOST', getenv('DB_HOST') ?: '127.0.0.1');
+define('DB_NAME', getenv('DB_NAME') ?: 'ezihgebeya');
+define('DB_USER', getenv('DB_USER') ?: 'root');
+define('DB_PASS', getenv('DB_PASS') ?: '');
 
 define('UPLOAD_DIR', __DIR__ . '/uploads');
 define('UPLOAD_URL', BASE_URL . '/uploads');
 define('MAX_UPLOAD_BYTES', 30 * 1024 * 1024);
+define('CACHE_DIR', __DIR__ . '/storage/cache'); // not web-addressable; see app/cache.php
 
 // Location data (MVP: config-driven; move to DB when scaling)
 const CITIES = [
@@ -60,7 +66,7 @@ const SUBCITY_COORDS = [
 
 // Free-tier IP geolocation fallback (no key required). Server-to-server call only —
 // see app/helpers.php ip_geolocate(). Swap for a paid provider before high-traffic launch.
-define('IP_GEO_API', 'http://ip-api.com/json/');
+define('IP_GEO_API', getenv('IP_GEO_API') ?: 'https://freeipapi.com/api/json/');
 
 const VENDOR_TYPES = ['seller','manufacturer','importer','service_provider','supplier'];
 
@@ -102,11 +108,46 @@ const AD_PRICING = ['cpm' => 'CPM (per 1,000 views)', 'cpc' => 'CPC (per click)'
 // Contact shown on "Advertise here" house ads when a slot has no paid campaign
 define('AD_SALES_CONTACT', 'tel:0911000000');
 
-define('CRON_SECRET', 'ezih-cron-2026');
+define('CRON_SECRET', getenv('CRON_SECRET') ?: '');
 
 // DEV mode: OTP codes are flashed on screen and SMS/email go to database/outbox.log
-// instead of a real gateway. Set to false at launch once a gateway is wired in.
-define('DEV_MODE', true);
+// instead of a real gateway. It is opt-in and can never be enabled in production.
+$appEnv = strtolower((string)(getenv('APP_ENV') ?: 'production'));
+$appDevMode = strtolower((string)(getenv('APP_DEV_MODE') ?: ''));
+define('DEV_MODE', $appEnv !== 'production' && in_array($appDevMode, ['1', 'true', 'yes', 'on'], true));
+
+// Never leak file paths/stack traces to visitors (cross-cutting security checklist: "No
+// production stack traces, SQL errors, OTPs, or secrets in responses"). display_errors
+// defaults to whatever php.ini says, which is commonly ON on dev/shared-hosting installs —
+// an uncaught exception would otherwise render the full server path, exact file/line, and
+// stack trace with a 200 status. Real errors still go to the PHP error log either way.
+ini_set('display_errors', DEV_MODE ? '1' : '0');
+ini_set('log_errors', '1');
+function render_fatal_error_page(string $devDetail): void {
+    if (!headers_sent()) http_response_code(500);
+    if (DEV_MODE) {
+        echo '<pre>' . htmlspecialchars($devDetail, ENT_QUOTES, 'UTF-8') . '</pre>';
+    } else {
+        echo '<!DOCTYPE html><html><head><title>Something went wrong</title></head>'
+           . '<body style="font-family:sans-serif;text-align:center;padding:60px 20px">'
+           . '<h1>Something went wrong</h1><p>Please try again in a moment.</p></body></html>';
+    }
+}
+set_exception_handler(function (Throwable $e): void {
+    error_log('Uncaught ' . get_class($e) . ': ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine() . "\n" . $e->getTraceAsString());
+    render_fatal_error_page((string)$e);
+});
+// Catches fatal errors that never reach the exception handler (e.g. memory exhaustion,
+// timeout) — the only path left that could still leak a raw PHP error page.
+register_shutdown_function(function (): void {
+    $err = error_get_last();
+    if ($err && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        error_log('Fatal: ' . $err['message'] . ' in ' . $err['file'] . ':' . $err['line']);
+        // display_errors is off in production (set above), so PHP hasn't already printed its
+        // own raw error text by the time this runs — safe to render our fallback page instead.
+        render_fatal_error_page($err['message'] . ' in ' . $err['file'] . ':' . $err['line']);
+    }
+});
 
 // Idle session timeout (§22.1.5)
 define('SESSION_TIMEOUT_MINUTES', 120);

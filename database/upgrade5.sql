@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 -- §6.6 / spec 17.9 video engagement events
+CREATE TABLE IF NOT EXISTS user_notification_preferences (
+    user_id BIGINT UNSIGNED NOT NULL,
+    category ENUM('inquiries','orders','reviews','promotions','support') NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, category),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS video_events (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     video_post_id BIGINT UNSIGNED NOT NULL,

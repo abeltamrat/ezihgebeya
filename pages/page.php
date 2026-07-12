@@ -4,6 +4,7 @@ $page = row("SELECT * FROM content_pages WHERE slug = ? AND status = 'published'
 if (!$page) { require __DIR__ . '/404.php'; return; }
 $pageTitle = $page['title'];
 $pageDesc = mb_substr(trim(preg_replace('/\s+/', ' ', (string)$page['body'])), 0, 155);
+$canonical = in_array($slug, ['about', 'contact', 'terms', 'privacy', 'prohibited-items'], true) ? $slug : 'page/' . $slug;
 include __DIR__ . '/../views/layout_top.php';
 ?>
 <div class="container section" style="max-width:820px">

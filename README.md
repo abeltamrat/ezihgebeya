@@ -8,16 +8,43 @@ Plain PHP 8 MVC + MySQL — runs on XAMPP now, deploys to any shared host later.
 1. Start Apache + MySQL in XAMPP.
 2. Open **http://localhost/ezihgebeya/**
 
+### CSS (Tailwind CSS 4 + DaisyUI 5)
+
+`assets/css/app.css` is **generated — do not edit it by hand**. The source is
+`assets/css/tailwind.css` (DaisyUI theme + marketplace layout styles). After
+changing it, or adding new Tailwind/DaisyUI classes in PHP templates, rebuild:
+
+```
+npm install        # once
+npm run css:build  # compile assets/css/app.css
+npm run css:watch  # rebuild on change while developing
+```
+
+Components (buttons, badges, alerts, cards, tables, skeletons…) come from
+[DaisyUI](https://daisyui.com/components/) — use its classes (`btn btn-primary`,
+`badge`, `alert alert-success`, …) instead of writing new custom CSS.
+
 ### Re-create the database from scratch
+
+`setup.sql` alone is the original v1.0 base schema only — it does **not** include
+everything added by later `database/upgradeN.sql` files (orders/payments, OTP,
+notifications, audit log, category attributes, search synonyms, support tickets,
+saved searches, and more). Running just `setup.sql` produces a database missing
+those tables/columns. The upgrade file list keeps growing, so don't hardcode which
+ones to run by hand here — use the built-in migration runner instead, which applies
+every `database/upgrade*.sql` file idempotently (safe to re-run) and records what
+ran in `db_migrations`:
 
 ```
 Get-Content database\setup.sql | C:\xampp\mysql\bin\mysql.exe -u root
-Get-Content database\upgrade2.sql | C:\xampp\mysql\bin\mysql.exe -u root
-Get-Content database\upgrade3.sql | C:\xampp\mysql\bin\mysql.exe -u root
-Get-Content database\upgrade5.sql | C:\xampp\mysql\bin\mysql.exe -u root
 C:\xampp\php\php.exe database\seed.php
 C:\xampp\php\php.exe database\seed5.php
 ```
+
+Then log in as a super admin (seeded above) and go to **Admin → Backups → Run
+migrations** to bring the schema fully up to date. Re-run that same button after
+pulling any change that adds a new `upgradeN.sql` — it only executes what hasn't
+run yet.
 
 ## Demo accounts (phone / password)
 
@@ -112,3 +139,104 @@ upload, real-time WebSocket chat (inquiry threads are request/response), deliver
 tracking, native mobile apps, AI recommendations — these need VPS/cloud hosting
 per the spec. Google/Telegram social login and Fayda ID checks (spec-optional)
 also remain.
+
+## Shared-hosting deployment runbook
+
+EzihGebeya is designed to run on Yegara/cPanel-style shared hosting without a
+persistent Node.js process. PHP and MySQL serve the application; Node/Vite are
+development/build-time tools only.
+
+### Build and upload
+
+1. Build CSS and the React pilot locally or in CI:
+
+   ```
+   npm install
+   npm run css:build
+   npm run build
+   ```
+
+2. Upload the PHP app, `assets/`, `views/`, `pages/`, `app/`, `database/`,
+   `uploads/.htaccess`, `sw.js`, and the built Vite static files.
+   Copy `frontend/dist/index.html` to `app/index.html` on the host and copy
+   `frontend/dist/assets/` to `app/assets/`; `/app/*` routes are served by the
+   static Vite shell while `/api/*` stays on the PHP front controller.
+3. Do not upload development caches, local logs, `.env` files, or `node_modules/`.
+4. Confirm the production domain/base path before final upload. Root-domain
+   hosting should use the existing empty production `BASE_URL`; subdirectory
+   hosting must be tested with that subdirectory in manifest, service-worker,
+   upload, and React routes.
+
+### Production configuration
+
+- Keep database credentials, cron secrets, SMS/email gateway keys, and payment
+  credentials outside public web files where hosting allows it.
+- Set development mode off before launch so OTPs, stack traces, SQL details, and
+  secrets are never shown to users.
+- Force HTTPS, secure cookies, and same-site cookies from hosting/control-panel
+  settings plus `.htaccess`.
+- Keep `uploads/.htaccess` in place so uploaded files cannot execute as PHP.
+- Keep the root `.htaccess` in place: it routes `/api/*` to PHP, routes
+  `/app/*` to the React build, serves real files under `assets/`, `app/assets/`,
+  and `uploads/`, blocks direct access to `database/`, `storage/`, `frontend/`,
+  backend PHP files under `app/`, logs, SQL dumps, and local config files, and
+  forces HTTPS outside local development.
+- Store private verification/payment documents outside the public web root where
+  Yegara permits; otherwise serve them only through authorized PHP endpoints.
+  Do not simply deny `uploads/payments/` or `uploads/verification/` in
+  `.htaccess` until those authorized download endpoints exist, because the
+  current admin/vendor review screens still read those stored paths.
+
+### Database migrations
+
+After every deploy that adds or changes `database/upgradeN.sql`:
+
+1. Log in as a super admin.
+2. Open **Admin -> Backups**.
+3. Click **Run migrations**.
+4. Confirm the page reports success and the new migration appears in
+   `db_migrations`.
+
+The migration runner is idempotent, so it is safe to re-run. Do not rely on
+`setup.sql` alone for an existing or freshly restored production database.
+
+### Cron
+
+Configure the daily cron URL in cPanel/Yegara using the production cron secret:
+
+```
+https://YOUR-DOMAIN/cron/daily?secret=YOUR_PRODUCTION_SECRET
+```
+
+The daily job expires promotions/subscriptions, performs retention cleanup,
+sends reminders/digests, and runs marketplace maintenance tasks. After launch,
+check the cron result regularly and keep the secret out of screenshots, commits,
+and public support tickets.
+
+### Backup and restore
+
+Before every major cutover:
+
+1. Download a database backup from **Admin -> Backups**.
+2. Download or archive `uploads/`.
+3. Record the deployed code version/commit and the migration number.
+4. Keep the previous release ready until customer, vendor, admin, upload,
+   payment, moderation, and cron smoke tests pass.
+
+Restore order:
+
+1. Put the site in maintenance mode.
+2. Restore the database backup.
+3. Restore the matching `uploads/` archive.
+4. Deploy the matching code release.
+5. Run migrations only if restoring forward to a newer code release.
+6. Smoke-test login, listing detail, inquiry, checkout/payment proof, vendor
+   dashboard, admin moderation, and cron.
+
+### Rollback
+
+If a deployment fails after upload but before data-changing migrations, switch
+back to the previous code release and clear browser/service-worker cache by
+shipping the previous `sw.js` or a new cache version. If migrations or production
+writes have already happened, restore the paired database/uploads backup instead
+of only replacing code.

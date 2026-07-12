@@ -43,6 +43,12 @@ function system_settings_defaults(): array {
             'max_images_per_listing' => 6,
             'inquiry_rate_max' => 5,        // per window per session
             'inquiry_rate_window_min' => 10,
+            'review_rate_max' => 5,         // per window per session (§22 cross-cutting rate limits)
+            'review_rate_window_min' => 10,
+            'listing_rate_max' => 10,       // listing create/edit submissions per window per session
+            'listing_rate_window_min' => 60,
+            'upload_rate_max' => 30,        // upload attempts per window per session
+            'upload_rate_window_min' => 60,
             'video_feed_size' => 50,
             'ar_model_max_mb' => 10,
         ],
@@ -160,6 +166,9 @@ function sanitize_system_settings(array $in): array {
 
     $out['limits'] = [];
     foreach (['max_images_per_listing' => [1, 20], 'inquiry_rate_max' => [1, 50], 'inquiry_rate_window_min' => [1, 120],
+              'review_rate_max' => [1, 50], 'review_rate_window_min' => [1, 120],
+              'listing_rate_max' => [1, 100], 'listing_rate_window_min' => [1, 240],
+              'upload_rate_max' => [1, 200], 'upload_rate_window_min' => [1, 240],
               'video_feed_size' => [10, 200], 'ar_model_max_mb' => [1, 100]] as $k => [$min, $max]) {
         $out['limits'][$k] = max($min, min($max, (int)($in['limits'][$k] ?? $d['limits'][$k])));
     }

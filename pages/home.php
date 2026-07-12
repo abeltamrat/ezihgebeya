@@ -22,14 +22,22 @@ foreach (['product' => 'products', 'service' => 'services', 'supply' => 'supplie
 usort($nearItems, fn($a, $b) => strtotime($b['created_at']) <=> strtotime($a['created_at']));
 $nearItems = array_slice($nearItems, 0, 8);
 
-$videoCount = (int)val("SELECT COUNT(*) FROM video_posts WHERE status = 'approved'");
+// These sections are identical for every visitor (no location/session personalization),
+// so they're cached briefly rather than re-querying the DB on every single home-page
+// hit. $nearItems above stays uncached since it depends on the visitor's location.
+$videoCount = cache_remember('home:video_count', 180, fn() => (int)val("SELECT COUNT(*) FROM video_posts WHERE status = 'approved'"));
 $ui = system_ui_config();
 $sectionOrder = $ui['home_sections'];
 $categoryLimit = max(4, min(16, (int)($ui['category_display_limit'] ?? 8)));
-$featured = rows($sel('products', 'title') . " ORDER BY l.is_featured DESC, l.created_at DESC LIMIT 8");
-$services = rows($sel('services', 'title') . " ORDER BY l.is_featured DESC, l.created_at DESC LIMIT 4");
-$supplies = rows($sel('supplies', 'name') . " ORDER BY l.is_featured DESC, l.created_at DESC LIMIT 4");
-$prodCats = rows("SELECT * FROM categories WHERE type = 'product' AND status = 'active' ORDER BY sort_order LIMIT {$categoryLimit}");
+$featured = cache_remember('home:featured', 180, fn() => rows($sel('products', 'title') . " ORDER BY l.is_featured DESC, l.created_at DESC LIMIT 8"));
+$services = cache_remember('home:services', 180, fn() => rows($sel('services', 'title') . " ORDER BY l.is_featured DESC, l.created_at DESC LIMIT 4"));
+$supplies = cache_remember('home:supplies', 180, fn() => rows($sel('supplies', 'name') . " ORDER BY l.is_featured DESC, l.created_at DESC LIMIT 4"));
+$prodCats = cache_remember("home:prodcats:{$categoryLimit}", 180, fn() => rows("SELECT c.*,
+        (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.status = 'active') AS listing_count
+    FROM categories c
+    WHERE c.type = 'product' AND c.status = 'active'
+    ORDER BY c.sort_order
+    LIMIT {$categoryLimit}"));
 
 include __DIR__ . '/../views/layout_top.php';
 ?>
@@ -39,8 +47,10 @@ include __DIR__ . '/../views/layout_top.php';
     <p><?= e($ui['hero_subtitle']) ?></p>
     <?php if (!empty($ui['hero_search_enabled'])): ?>
     <form class="hero-search" action="<?= url('products') ?>" method="get">
-      <input type="search" name="q" placeholder="What are you looking for? e.g. L-shape sofa, gypsum work, 18mm MDF...">
-      <select name="city"><option value="">All cities</option>
+      <label class="sr-only" for="hero-search-q">Search marketplace</label>
+      <input type="search" name="q" id="hero-search-q" placeholder="What are you looking for? e.g. L-shape sofa, gypsum work, 18mm MDF...">
+      <label class="sr-only" for="hero-search-city">City</label>
+      <select name="city" id="hero-search-city"><option value="">All cities</option>
         <?php foreach (array_keys(CITIES) as $c): ?><option><?= e($c) ?></option><?php endforeach; ?>
       </select>
       <button type="submit" class="btn btn-primary">Search<?= system_ui_button_badge('primary') ?></button>
@@ -94,7 +104,7 @@ include __DIR__ . '/../views/layout_top.php';
 
 <?php foreach ($sectionOrder as $homeSection): ?>
 <?php if ($homeSection === 'categories' && system_ui_section_enabled('categories')): ?>
-<section class="container section">
+<section class="container section home-categories">
   <div class="section-head">
     <div>
       <div class="section-label"><?= system_ui_icon('furniture', 'Category') ?> Categories</div>
@@ -104,8 +114,10 @@ include __DIR__ . '/../views/layout_top.php';
   </div>
   <div class="cat-grid">
     <?php foreach ($prodCats as $c): ?>
-      <a class="cat-tile" href="<?= url('products?category=' . e($c['slug'])) ?>">
-        <span class="cat-icon"><?= system_ui_category_icon((string)$c['name'], 'product') ?></span><span><?= e($c['name']) ?></span>
+      <a class="cat-tile" href="<?= url('products?category=' . e($c['slug'])) ?>" aria-label="<?= e($c['name']) ?> category, <?= number_format((int)$c['listing_count']) ?> <?= (int)$c['listing_count'] === 1 ? 'listing' : 'listings' ?>">
+        <span class="cat-icon" aria-hidden="true"><?= system_ui_category_icon((string)$c['name'], 'product') ?></span>
+        <span class="cat-name"><?= e($c['name']) ?></span>
+        <span class="cat-count"><?= number_format((int)$c['listing_count']) ?> <?= (int)$c['listing_count'] === 1 ? 'listing' : 'listings' ?></span>
       </a>
     <?php endforeach; ?>
     <a class="cat-tile cat-more" href="<?= url('products') ?>">

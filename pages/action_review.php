@@ -13,6 +13,19 @@ $title = trim($_POST['title'] ?? '');
 if (!in_array($type, ['product', 'service', 'supply', 'business'], true) || !$bid || $comment === '') {
     flash('Review could not be submitted.', 'error'); redirect('');
 }
+// self-review guard: an owner reviewing their own business would inflate rating_average/
+// rating_count, which directly feeds §8.4's ranking score (ranking.rating weight) and the
+// star rating shown to buyers (business.php, detail.php, JSON-LD ratingValue/reviewCount) —
+// a real deceptive self-dealing vector, not just a cosmetic one.
+if (val("SELECT COUNT(*) FROM businesses WHERE id = ? AND user_id = ?", [$bid, $u['id']])) {
+    flash('You can\'t review your own business.', 'error'); redirect('');
+}
+// rate limit per session — thresholds set in admin → Settings → Limits (§22 cross-cutting
+// rate limits: the "one review per target" check below stops repeat-review spam on a single
+// business, but does nothing to stop a script rotating across many businesses)
+$reviewRateMax = (int)sys('limits.review_rate_max', 5);
+$reviewRateWindow = (int)sys('limits.review_rate_window_min', 10) * 60;
+if (rate_limited('review', $reviewRateMax, $reviewRateWindow)) { flash('Too many reviews — please wait a few minutes.', 'error'); redirect(''); }
 // one review per user per target
 if (val("SELECT COUNT(*) FROM reviews WHERE reviewer_id = ? AND business_id = ? AND listing_type = ? AND (listing_id <=> ?)", [$u['id'], $bid, $type, $lid])) {
     flash('You already reviewed this.', 'error');
@@ -30,16 +43,25 @@ if (val("SELECT COUNT(*) FROM reviews WHERE reviewer_id = ? AND business_id = ? 
         if ($path) $images[] = $path;
     }
     $rStatus = sys('moderation.auto_approve_reviews') ? 'approved' : 'pending'; // §16.3 policy switch
-    q("INSERT INTO reviews (reviewer_id, business_id, listing_type, listing_id, order_id, rating, title, comment, images, is_verified_purchase, status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-      [$u['id'], $bid, $type, $lid, $orderId ?: null, $rating, $title ?: null, $comment,
-       $images ? json_encode($images) : null, $orderId ? 1 : 0, $rStatus]);
-    if ($rStatus === 'approved') {
-        $agg = row("SELECT AVG(rating) a, COUNT(*) c FROM reviews WHERE business_id = ? AND status = 'approved'", [$bid]);
-        q("UPDATE businesses SET rating_average = ?, rating_count = ? WHERE id = ?", [round($agg['a'], 2), $agg['c'], $bid]);
-        notify_business($bid, 'review_received', 'You received a new ' . $rating . '★ review', 'vendor/reviews');
+    try {
+        // The COUNT(*) check above is a fast path, not the real guard — a UNIQUE constraint
+        // on reviews(reviewer_id, business_id, listing_type, listing_id_key) (database/upgrade21.sql)
+        // is what actually stops two concurrent submits (double-click, two tabs) from both
+        // passing the check before either commits. Treat the resulting duplicate-key error the
+        // same way pages/admin.php's synonym_add treats one: "already exists," not a bug.
+        q("INSERT INTO reviews (reviewer_id, business_id, listing_type, listing_id, order_id, rating, title, comment, images, is_verified_purchase, status)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+          [$u['id'], $bid, $type, $lid, $orderId ?: null, $rating, $title ?: null, $comment,
+           $images ? json_encode($images) : null, $orderId ? 1 : 0, $rStatus]);
+        if ($rStatus === 'approved') {
+            $agg = row("SELECT AVG(rating) a, COUNT(*) c FROM reviews WHERE business_id = ? AND status = 'approved'", [$bid]);
+            q("UPDATE businesses SET rating_average = ?, rating_count = ? WHERE id = ?", [round($agg['a'], 2), $agg['c'], $bid]);
+            notify_business($bid, 'review_received', 'You received a new ' . $rating . '★ review', 'vendor/reviews');
+        }
+        flash($rStatus === 'approved' ? 'Thanks! Your review is live.' : 'Thanks! Your review will appear after moderation.');
+    } catch (Throwable $e) {
+        flash('You already reviewed this.', 'error');
     }
-    flash($rStatus === 'approved' ? 'Thanks! Your review is live.' : 'Thanks! Your review will appear after moderation.');
 }
 $ref = $_SERVER['HTTP_REFERER'] ?? '';
 redirect($ref ? ltrim(substr(parse_url($ref, PHP_URL_PATH), strlen(BASE_URL)), '/') : '');

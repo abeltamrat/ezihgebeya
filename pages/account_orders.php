@@ -15,7 +15,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $methods = payment_methods(false);
         $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
         $proof = upload_image($_FILES['proof_image'] ?? [], 'payments');
-        if ($ref === '' && !$proof) {
+        // Server-side duplicate guard: the "pay" button is only hidden client-side once a
+        // pending/confirmed payment exists, which a second direct POST bypasses entirely —
+        // verified this let two full-amount payments land against one order, double-counting
+        // the payments ledger. One order = one payment-in-full record.
+        $existing = val("SELECT COUNT(*) FROM payments WHERE order_id = ? AND status IN ('pending','confirmed')", [$oid]);
+        if ($existing) {
+            flash('A payment for this order is already submitted or confirmed.', 'error');
+        } elseif ($ref === '' && !$proof) {
             flash('Add a transaction reference or a proof screenshot.', 'error');
         } else {
             q("INSERT INTO payments (payer_id, business_id, order_id, payment_type, amount, payment_method, reference_number, proof_image)
@@ -29,11 +36,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $orders = rows("SELECT o.*, b.business_name, b.phone b_phone FROM orders o JOIN businesses b ON b.id = o.business_id
     WHERE o.customer_id = ? ORDER BY o.created_at DESC", [$u['id']]);
-include __DIR__ . '/../views/layout_top.php';
+$isPartial = ($_GET['partial'] ?? '') === 'orders';
+if (!$isPartial) include __DIR__ . '/../views/layout_top.php';
 ?>
+<?php if (!$isPartial): ?>
 <div class="container section">
   <h1>📦 My Orders</h1>
   <p><a href="<?= url('account') ?>">← Back to my account</a></p>
+<?php endif; ?>
+  <div id="account-orders-poll"
+       hx-get="<?= url('account/orders?partial=orders') ?>"
+       hx-trigger="every 15s"
+       hx-swap="outerHTML">
   <?php if (!$orders): ?><div class="empty-state">No orders yet. Add products to your <a href="<?= url('cart') ?>">cart</a> to get started.</div><?php endif; ?>
 
   <?php foreach ($orders as $o):
@@ -88,5 +102,8 @@ include __DIR__ . '/../views/layout_top.php';
     </div>
   </div>
   <?php endforeach; ?>
+  </div>
+<?php if (!$isPartial): ?>
 </div>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>
+<?php endif; ?>

@@ -5,7 +5,9 @@ $sections = ['dashboard' => '📊 Dashboard', 'businesses' => '🏪 Businesses',
     'supplies' => '📦 Supplies', 'videos' => '▶ Videos', 'reviews' => '⭐ Reviews', 'reports' => '🚩 Reports',
     'inquiries' => '💬 Inquiries', 'orders' => '🧾 Orders', 'payments' => '💳 Payments', 'promotions' => '📣 Promotions',
     'subscriptions' => '🎫 Subscriptions', 'users' => '👥 Users', 'categories' => '🗂 Categories',
+    'search_synonyms' => '🔤 Search Synonyms',
     'locations' => '📍 Locations', 'pages' => '📄 Content Pages', 'analytics' => '📈 Analytics', 'audit' => '🧾 Audit Log'];
+$sections['support'] = 'Support';
 if ($u['account_type'] === 'super_admin') {
     $sections['ads'] = 'Ad Manager';
     $sections['settings'] = '⚙️ System Settings';
@@ -28,22 +30,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($_POST['status'] === 'rejected') notify_business($id, 'verification_rejected', 'Your business registration was rejected', 'vendor/business');
         flash('Business updated.');
     } elseif ($do === 'biz_verify' && in_array($_POST['verification_status'], ['unverified', 'phone_verified', 'document_verified', 'location_verified', 'premium_verified'], true)) {
-        q("UPDATE businesses SET verification_status = ? WHERE id = ?", [$_POST['verification_status'], $id]);
+        $newLevel = $_POST['verification_status'];
+        $prevLevel = (string)val("SELECT verification_status FROM businesses WHERE id = ?", [$id]);
+        q("UPDATE businesses SET verification_status = ? WHERE id = ?", [$newLevel, $id]);
+        // Close out any pending verification_requests for this business so a later vr_review
+        // approval on a stale request can't silently overwrite this hand-set value — the two
+        // paths write the same column with no other coordination between them.
+        q("UPDATE verification_requests SET status = 'rejected', admin_note = 'Superseded by a manual admin verification-level change.', reviewed_by = ?
+           WHERE business_id = ? AND status = 'pending'", [$u['id'], $id]);
+        // Same user-facing badge change vr_review notifies for — this is just the direct
+        // admin path to the same verification_status column, so it must notify too.
+        if ($newLevel !== $prevLevel) {
+            if ($newLevel === 'unverified') {
+                notify_business($id, 'verification_rejected', 'Your business verification badge was removed', 'vendor/verification');
+            } else {
+                notify_business($id, 'verification_approved', 'Verification updated — ' . str_replace('_', ' ', $newLevel) . ' badge is now active', 'vendor/verification', '', true);
+            }
+        }
         flash('Verification level updated.');
     } elseif ($do === 'listing_status' && isset(LISTING_TABLES[$_POST['ltype'] ?? '']) ) {
         $t = LISTING_TABLES[$_POST['ltype']];
-        $allowed = ['active', 'rejected', 'paused', 'pending_review', 'deleted'];
+        $allowed = ['active', 'rejected', 'paused', 'expired', 'sold_out', 'pending_review', 'deleted'];
         if (in_array($_POST['status'], $allowed, true)) {
-            q("UPDATE `$t` SET status = ? WHERE id = ?", [$_POST['status'], $id]);
+            $hasRejectMeta = db_column_exists($t, 'rejection_reason');
+            if ($hasRejectMeta && $_POST['status'] === 'rejected') {
+                $reason = $_POST['rejection_reason'] ?? 'other';
+                if (!array_key_exists($reason, listing_rejection_reasons())) $reason = 'other';
+                $note = trim($_POST['rejection_note'] ?? '') ?: listing_rejection_instruction($reason);
+                q("UPDATE `$t` SET status = ?, rejection_reason = ?, rejection_note = ? WHERE id = ?", [$_POST['status'], $reason, $note, $id]);
+            } elseif ($hasRejectMeta && in_array($_POST['status'], ['active', 'pending_review'], true)) {
+                q("UPDATE `$t` SET status = ?, rejection_reason = NULL, rejection_note = NULL WHERE id = ?", [$_POST['status'], $id]);
+            } else {
+                q("UPDATE `$t` SET status = ? WHERE id = ?", [$_POST['status'], $id]);
+            }
             $l = row("SELECT business_id, " . listing_title_col($_POST['ltype']) . " t FROM `$t` WHERE id = ?", [$id]);
             if ($l && $_POST['status'] === 'active') notify_business((int)$l['business_id'], 'listing_approved', '"' . $l['t'] . '" was approved and is now live', 'vendor/listings/' . $_POST['ltype']);
-            if ($l && $_POST['status'] === 'rejected') notify_business((int)$l['business_id'], 'listing_rejected', '"' . $l['t'] . '" was rejected by moderation', 'vendor/listings/' . $_POST['ltype']);
+            if ($l && $_POST['status'] === 'rejected') notify_business((int)$l['business_id'], 'listing_rejected', '"' . $l['t'] . '" was rejected: ' . listing_rejection_instruction($_POST['rejection_reason'] ?? 'other'), 'vendor/listings/' . $_POST['ltype']);
             flash('Listing ' . $_POST['status'] . '.');
         }
     } elseif ($do === 'listing_feature' && isset(LISTING_TABLES[$_POST['ltype'] ?? ''])) {
-        $t = LISTING_TABLES[$_POST['ltype']];
-        q("UPDATE `$t` SET is_featured = 1 - is_featured WHERE id = ?", [$id]);
-        flash('Featured toggled.');
+        // Routed through the same promotions ledger paid promotions use (promotion_apply/
+        // promotion_activate), never a direct column hand-toggle: is_featured must always be
+        // derived from a promotions row so cron's expiry job and the paid-promotion system see
+        // consistent state, per the Revenue model's entitlement-ledger rule. A hand-toggled flag
+        // has no starts_at/ends_at, so it never expires and can silently fight a real paid
+        // promotion's flag. Un-featuring stops whatever promotion is actually driving the flag
+        // (paid or free) via the same cancel semantics promo_stop already uses elsewhere in this
+        // file — an admin acting on this button is asserting "this should not be featured", same
+        // authority admins already have via promo_stop, not a payment refund decision.
+        $ltype = $_POST['ltype'];
+        $t = LISTING_TABLES[$ltype];
+        $listing = row("SELECT id, business_id, is_featured FROM `$t` WHERE id = ?", [$id]);
+        if ($listing) {
+            if ($listing['is_featured']) {
+                $promo = row("SELECT * FROM promotions WHERE promotable_type = ? AND promotable_id = ? AND status = 'active'
+                              ORDER BY id DESC LIMIT 1", [$ltype, $id]);
+                if ($promo) {
+                    q("UPDATE promotions SET status = 'cancelled' WHERE id = ?", [$promo['id']]);
+                    promotion_apply($promo, false);
+                } else {
+                    // no ledger row (e.g. pre-existing hand-toggled data) — clear directly as a one-time fallback
+                    q("UPDATE `$t` SET is_featured = 0 WHERE id = ?", [$id]);
+                }
+                flash('Featured removed.');
+            } else {
+                q("INSERT INTO promotions (business_id, promotable_type, promotable_id, promotion_type, duration_weeks, budget, pricing_type, status)
+                   VALUES (?,?,?, 'category_featured', 52, 0, 'fixed_weekly', 'pending')",
+                  [$listing['business_id'], $ltype, $id]);
+                $promo = row("SELECT * FROM promotions WHERE id = ?", [(int)db()->lastInsertId()]);
+                if ($promo) promotion_activate($promo);
+                flash('Listing featured.');
+            }
+        }
     } elseif ($do === 'video_status' && in_array($_POST['status'], ['approved', 'rejected', 'disabled', 'pending', 'deleted'], true)) {
         q("UPDATE video_posts SET status = ? WHERE id = ?", [$_POST['status'], $id]);
         $v = row("SELECT business_id, title FROM video_posts WHERE id = ?", [$id]);
@@ -51,31 +109,99 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($v && $_POST['status'] === 'rejected') notify_business((int)$v['business_id'], 'listing_rejected', 'Your video was rejected by moderation', 'vendor/videos');
         flash('Video ' . $_POST['status'] . '.');
     } elseif ($do === 'review_status' && in_array($_POST['status'], ['approved', 'rejected', 'hidden'], true)) {
+        $r = row("SELECT business_id, status FROM reviews WHERE id = ?", [$id]);
+        $wasApproved = $r && $r['status'] === 'approved';
         q("UPDATE reviews SET status = ? WHERE id = ?", [$_POST['status'], $id]);
-        if ($_POST['status'] === 'approved') {
-            $r = row("SELECT business_id FROM reviews WHERE id = ?", [$id]);
+        // recompute on every transition into or out of 'approved' — not just when approving —
+        // otherwise hiding/rejecting a previously-approved review leaves the business's cached
+        // rating_average/rating_count stale (still counting a review that's no longer approved).
+        if ($r && ($_POST['status'] === 'approved' || $wasApproved)) {
             $agg = row("SELECT AVG(rating) a, COUNT(*) c FROM reviews WHERE business_id = ? AND status = 'approved'", [$r['business_id']]);
-            q("UPDATE businesses SET rating_average = ?, rating_count = ? WHERE id = ?", [round($agg['a'], 2), $agg['c'], $r['business_id']]);
-            notify_business((int)$r['business_id'], 'review_received', 'You received a new review', 'vendor/reviews');
+            q("UPDATE businesses SET rating_average = ?, rating_count = ? WHERE id = ?", [round($agg['a'] ?? 0, 2), $agg['c'] ?? 0, $r['business_id']]);
+            if ($_POST['status'] === 'approved') notify_business((int)$r['business_id'], 'review_received', 'You received a new review', 'vendor/reviews');
         }
         flash('Review ' . $_POST['status'] . '.');
     } elseif ($do === 'report_status' && in_array($_POST['status'], ['open', 'reviewing', 'resolved', 'dismissed'], true)) {
         q("UPDATE reports SET status = ?, admin_note = ? WHERE id = ?", [$_POST['status'], trim($_POST['admin_note'] ?? '') ?: null, $id]);
         flash('Report updated.');
+    } elseif ($do === 'support_update' && db_table_exists('support_tickets')) {
+        $status = $_POST['status'] ?? 'open';
+        $priority = $_POST['priority'] ?? 'normal';
+        if (in_array($status, ['open', 'waiting_user', 'escalated', 'resolved', 'closed'], true)
+            && in_array($priority, ['low', 'normal', 'high'], true)) {
+            q("UPDATE support_tickets SET status = ?, priority = ?, assigned_admin_id = ?, admin_note = ? WHERE id = ?",
+              [$status, $priority, $u['id'], trim($_POST['admin_note'] ?? '') ?: null, $id]);
+            $ticket = row("SELECT user_id, subject FROM support_tickets WHERE id = ?", [$id]);
+            if ($ticket && in_array($status, ['waiting_user', 'resolved', 'closed'], true)) {
+                notify((int)$ticket['user_id'], 'support_update', 'Support ticket #' . $id . ' was updated: ' . $status, 'support', $ticket['subject'] ?? '');
+            }
+            flash('Support ticket updated.');
+        }
+    } elseif ($do === 'support_escalate' && db_table_exists('support_tickets')) {
+        $ticket = row("SELECT * FROM support_tickets WHERE id = ?", [$id]);
+        $reportedType = $_POST['reported_type'] ?? ($ticket['related_type'] ?? '');
+        $reportedId = max(0, (int)($_POST['reported_id'] ?? ($ticket['related_id'] ?? 0)));
+        $moderatable = ['product', 'service', 'supply', 'business', 'video', 'review', 'user'];
+        if ($ticket && in_array($reportedType, $moderatable, true) && $reportedId > 0) {
+            $desc = "Escalated from support ticket #{$ticket['id']}: {$ticket['subject']}\n\n{$ticket['message']}";
+            $adminNote = trim($_POST['admin_note'] ?? '');
+            if ($adminNote !== '') $desc .= "\n\nSupport note: " . $adminNote;
+            q("INSERT INTO reports (reporter_id, reported_type, reported_id, reason, description, status, admin_note)
+               VALUES (?,?,?,?,?,'open',?)",
+              [$ticket['user_id'], $reportedType, $reportedId, 'support_ticket', $desc, $adminNote ?: null]);
+            $reportId = (int)db()->lastInsertId();
+            q("UPDATE support_tickets SET status = 'escalated', priority = 'high', assigned_admin_id = ?, admin_note = ?, report_id = ? WHERE id = ?",
+              [$u['id'], $adminNote ?: ($ticket['admin_note'] ?? null), $reportId, $id]);
+            notify((int)$ticket['user_id'], 'support_update', 'Support ticket #' . $id . ' was escalated to moderation', 'support');
+            flash('Ticket escalated to moderation report #' . $reportId . '.');
+        } else {
+            flash('Choose a moderatable target type and ID before escalating.', 'error');
+        }
     } elseif ($do === 'user_status' && in_array($_POST['status'], ['active', 'suspended', 'banned'], true)) {
-        if ($id !== (int)$u['id']) { q("UPDATE users SET status = ? WHERE id = ? AND account_type != 'super_admin'", [$_POST['status'], $id]); flash('User updated.'); }
+        if ($id !== (int)$u['id']) {
+            q("UPDATE users SET status = ? WHERE id = ? AND account_type != 'super_admin'", [$_POST['status'], $id]);
+            if ($_POST['status'] === 'active') {
+                lift_account_sanctions($id, (int)$u['id'], trim($_POST['appeal_response'] ?? ''));
+            } else {
+                create_account_sanction($id, (int)$u['id'], $_POST['status'], trim($_POST['sanction_reason'] ?? 'policy_violation'), trim($_POST['admin_note'] ?? ''));
+                notify($id, 'account_sanction', 'Your account was ' . $_POST['status'] . '. You can appeal this decision.', 'appeal', trim($_POST['admin_note'] ?? ''), true);
+            }
+            flash('User updated.');
+        }
+    } elseif ($do === 'sanction_appeal' && db_table_exists('account_sanctions')) {
+        $sid = (int)($_POST['sanction_id'] ?? 0);
+        $decision = $_POST['appeal_status'] ?? '';
+        $response = trim($_POST['appeal_response'] ?? '');
+        $s = row("SELECT * FROM account_sanctions WHERE id = ?", [$sid]);
+        if ($s && in_array($decision, ['approved', 'rejected'], true)) {
+            q("UPDATE account_sanctions SET appeal_status = ?, appeal_response = ?, reviewed_by = ?, reviewed_at = NOW(),
+               status = IF(? = 'approved', 'lifted', status), lifted_at = IF(? = 'approved', NOW(), lifted_at) WHERE id = ?",
+              [$decision, $response ?: null, $u['id'], $decision, $decision, $sid]);
+            if ($decision === 'approved') q("UPDATE users SET status = 'active' WHERE id = ? AND status IN ('suspended','banned')", [$s['user_id']]);
+            notify((int)$s['user_id'], 'sanction_appeal_' . $decision, 'Your account appeal was ' . $decision, 'appeal', $response, true);
+            flash('Appeal reviewed.');
+        }
     } elseif ($do === 'payment_confirm' || $do === 'payment_reject') {
         $p = row("SELECT * FROM payments WHERE id = ? AND status = 'pending'", [$id]);
-        if ($p) {
+        // The UPDATE itself (not just the SELECT above) carries the "still pending" guard, and
+        // only proceeds with the linked-item activation if this request is the one that actually
+        // won the race — two near-simultaneous confirm clicks both passing the SELECT before
+        // either commits would otherwise both run the activation path.
+        $claimed = $p ? q("UPDATE payments SET status = ? WHERE id = ? AND status = 'pending'",
+            [$do === 'payment_confirm' ? 'confirmed' : 'rejected', $id])->rowCount() : 0;
+        if ($p && $claimed) {
+            q("UPDATE payments SET confirmed_by = ? WHERE id = ?", [$u['id'], $id]);
             if ($do === 'payment_confirm') {
-                q("UPDATE payments SET status = 'confirmed', confirmed_by = ? WHERE id = ?", [$u['id'], $id]);
                 if ($p['order_id']) {
                     q("UPDATE orders SET status = 'deposit_paid' WHERE id = ? AND status IN ('pending','confirmed')", [$p['order_id']]);
                 } elseif ($p['promotion_id']) {
                     $promo = row("SELECT * FROM promotions WHERE id = ?", [$p['promotion_id']]);
                     if ($promo && $promo['status'] === 'pending') {
-                        q("UPDATE promotions SET status = 'active', starts_at = NOW(), ends_at = NOW() + INTERVAL duration_weeks WEEK WHERE id = ?", [$promo['id']]);
-                        promotion_apply($promo, true);
+                        if (promotion_activate($promo)) {
+                            flash('Payment confirmed and promotion activated.');
+                        } else {
+                            flash('Payment confirmed, but promotion stayed pending because the target is not approved/live yet.', 'warning');
+                        }
                     }
                 } elseif ($p['subscription_id']) {
                     $sub = row("SELECT * FROM subscriptions WHERE id = ?", [$p['subscription_id']]);
@@ -85,20 +211,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
                 notify((int)$p['payer_id'], 'payment_received', 'Your payment of ' . money($p['amount']) . ' was confirmed', $p['order_id'] ? 'account/orders' : 'vendor', '', true);
-                flash('Payment confirmed and linked item activated.');
+                flash('Payment confirmed and linked item processed.');
             } else {
-                q("UPDATE payments SET status = 'rejected', confirmed_by = ? WHERE id = ?", [$u['id'], $id]);
                 if ($p['promotion_id']) q("UPDATE promotions SET status = 'rejected' WHERE id = ? AND status = 'pending'", [$p['promotion_id']]);
                 if ($p['subscription_id']) q("UPDATE subscriptions SET status = 'rejected' WHERE id = ? AND status = 'pending'", [$p['subscription_id']]);
+                notify((int)$p['payer_id'], 'payment_rejected', 'Your payment of ' . money($p['amount']) . ' was rejected — please review and resubmit', $p['order_id'] ? 'account/orders' : 'vendor', '', true);
                 flash('Payment rejected.');
             }
         }
     } elseif ($do === 'promo_stop') {
         $promo = row("SELECT * FROM promotions WHERE id = ?", [$id]);
-        if ($promo && in_array($promo['status'], ['active', 'pending'], true)) {
+        if ($promo && in_array($promo['status'], ['active', 'pending', 'scheduled', 'paused'], true)) {
             q("UPDATE promotions SET status = 'cancelled' WHERE id = ?", [$id]);
             if ($promo['status'] === 'active') promotion_apply($promo, false);
             flash('Promotion stopped.');
+        }
+    } elseif ($do === 'promo_update') {
+        $promo = row("SELECT * FROM promotions WHERE id = ?", [$id]);
+        $status = $_POST['status'] ?? '';
+        if ($promo && in_array($status, ['active', 'scheduled', 'paused', 'cancelled'], true)) {
+            if ($promo['status'] === 'active' && $status !== 'active') promotion_apply($promo, false);
+            if ($status === 'active') {
+                if (promotion_activate($promo)) flash('Promotion activated.');
+                else flash('Promotion cannot activate until its target is approved/live.', 'error');
+            } elseif ($status === 'scheduled') {
+                $starts = trim($_POST['starts_at'] ?? '');
+                $starts = $starts ? str_replace('T', ' ', substr($starts, 0, 16)) . ':00' : date('Y-m-d H:i:s', time() + 86400);
+                q("UPDATE promotions SET status = 'scheduled', starts_at = ?, ends_at = DATE_ADD(?, INTERVAL duration_weeks WEEK) WHERE id = ?", [$starts, $starts, $id]);
+                flash('Promotion scheduled.');
+            } elseif ($status === 'paused') {
+                q("UPDATE promotions SET status = 'paused' WHERE id = ?", [$id]);
+                flash('Promotion paused.');
+            } elseif ($status === 'cancelled') {
+                q("UPDATE promotions SET status = 'cancelled' WHERE id = ?", [$id]);
+                flash('Promotion cancelled.');
+            }
         }
     } elseif ($do === 'order_status' && in_array($_POST['status'] ?? '', ['pending','confirmed','deposit_paid','processing','ready_for_delivery','out_for_delivery','delivered','completed','cancelled','refunded','disputed'], true)) {
         q("UPDATE orders SET status = ? WHERE id = ?", [$_POST['status'], $id]);
@@ -190,20 +337,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($do === 'cat_toggle') {
         q("UPDATE categories SET status = IF(status='active','inactive','active') WHERE id = ?", [$id]);
         flash('Category toggled.');
+    } elseif ($do === 'attr_add' && (int)($_POST['category_id'] ?? 0) > 0 && trim($_POST['key_name'] ?? '') !== '') {
+        $catId = (int)$_POST['category_id'];
+        $key = strtolower(trim(preg_replace('/[^a-z0-9_]+/i', '_', trim($_POST['key_name'])), '_'));
+        $type = in_array($_POST['input_type'] ?? '', ['text', 'number', 'select', 'boolean'], true) ? $_POST['input_type'] : 'text';
+        $options = null;
+        if ($type === 'select') {
+            $opts = array_values(array_filter(array_map('trim', explode(',', $_POST['options'] ?? ''))));
+            $options = $opts ? json_encode($opts, JSON_UNESCAPED_UNICODE) : null;
+        }
+        if ($key === '') {
+            flash('Attribute key is required.', 'error');
+        } else {
+            q("INSERT INTO category_attributes (category_id, key_name, label, input_type, options, unit, is_required, is_filterable, sort_order)
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON DUPLICATE KEY UPDATE label=VALUES(label), input_type=VALUES(input_type), options=VALUES(options), unit=VALUES(unit),
+                 is_required=VALUES(is_required), is_filterable=VALUES(is_filterable), sort_order=VALUES(sort_order)",
+              [$catId, $key, trim($_POST['label'] ?? '') ?: ucfirst(str_replace('_', ' ', $key)), $type, $options,
+               trim($_POST['unit'] ?? '') ?: null, isset($_POST['is_required']) ? 1 : 0, isset($_POST['is_filterable']) ? 1 : 0, (int)($_POST['sort_order'] ?? 0)]);
+            flash('Attribute saved.');
+        }
+        $redirectQuery = 'cat=' . $catId;
+    } elseif ($do === 'attr_delete') {
+        $catId = (int)val("SELECT category_id FROM category_attributes WHERE id = ?", [$id]);
+        q("DELETE FROM category_attributes WHERE id = ?", [$id]);
+        flash('Attribute removed.');
+        if ($catId) $redirectQuery = 'cat=' . $catId;
+    } elseif ($do === 'synonym_add' && trim($_POST['latin_term'] ?? '') !== '' && trim($_POST['amharic_term'] ?? '') !== '') {
+        try {
+            q("INSERT INTO search_synonyms (latin_term, amharic_term) VALUES (?,?)",
+              [mb_strtolower(trim($_POST['latin_term'])), trim($_POST['amharic_term'])]);
+            flash('Synonym added.');
+        } catch (Throwable $e) {
+            flash('That pair already exists.', 'error');
+        }
+    } elseif ($do === 'synonym_delete') {
+        q("DELETE FROM search_synonyms WHERE id = ?", [$id]);
+        flash('Synonym removed.');
     } else {
         require __DIR__ . '/admin_more_actions.php'; // verification, locations, pages, admins, backups, ad credits
     }
     if ($do !== '') audit($do, $_POST['ltype'] ?? $_POST['reported_type'] ?? $section, $id ?: null,
         implode(' ', array_filter([$_POST['status'] ?? '', $_POST['verification_status'] ?? ''])));
-    redirect('admin/' . $section);
+    redirect('admin/' . $section . (!empty($redirectQuery) ? '?' . $redirectQuery : ''));
 }
 
 // ---------- data ----------
 $statusFilter = $_GET['status'] ?? '';
 include __DIR__ . '/../views/layout_top.php';
 ?>
-<div class="container section dash-layout">
-  <aside class="dash-nav">
+<div class="dash-layout admin-layout">
+  <aside class="dash-nav admin-sidebar">
+    <div class="admin-sidebar-logo">
+      <span class="logo-mark"><?= e($ui['logo_mark'] ?? 'EG') ?></span>
+      <span><?= e(site_name()) ?></span>
+    </div>
     <h3>Admin</h3>
     <?php
     $pendCounts = [
@@ -215,6 +403,7 @@ include __DIR__ . '/../views/layout_top.php';
         'videos' => val("SELECT COUNT(*) FROM video_posts WHERE status='pending'"),
         'reviews' => val("SELECT COUNT(*) FROM reviews WHERE status='pending'"),
         'reports' => val("SELECT COUNT(*) FROM reports WHERE status='open'"),
+        'support' => db_table_exists('support_tickets') ? val("SELECT COUNT(*) FROM support_tickets WHERE status IN ('open','waiting_user')") : 0,
         'orders' => val("SELECT COUNT(*) FROM orders WHERE status='pending'"),
         'payments' => val("SELECT COUNT(*) FROM payments WHERE status='pending'"),
     ];
@@ -289,6 +478,8 @@ include __DIR__ . '/../views/layout_top.php';
     $lt = ['products' => 'product', 'services' => 'service', 'supplies' => 'supply'][$section];
     $t = LISTING_TABLES[$lt];
     $tc = listing_title_col($lt);
+    $hasRejectMeta = db_column_exists($t, 'rejection_reason');
+    $rejectReasons = listing_rejection_reasons();
     $list = rows("SELECT l.*, b.business_name FROM `$t` l JOIN businesses b ON b.id=l.business_id
         WHERE l.status != 'deleted' ORDER BY (l.status='pending_review') DESC, l.created_at DESC LIMIT 200");
     ?>
@@ -301,15 +492,39 @@ include __DIR__ . '/../views/layout_top.php';
         <td><?= e($l['business_name']) ?></td>
         <td><?= e($l['city']) ?></td>
         <td><?= money($l['price'] ?? $l['starting_price'] ?? $l['price_per_unit'] ?? null) ?: '—' ?></td>
-        <td><span class="badge badge-status-<?= e($l['status']) ?>"><?= e(str_replace('_', ' ', $l['status'])) ?></span></td>
+        <td><span class="badge badge-status-<?= e($l['status']) ?>"><?= e(str_replace('_', ' ', $l['status'])) ?></span>
+          <?php if ($hasRejectMeta && $l['status'] === 'rejected' && !empty($l['rejection_reason'])): ?>
+            <br><span class="muted small"><?= e(str_replace('_', ' ', $l['rejection_reason'])) ?></span>
+          <?php endif; ?>
+        </td>
         <td>
           <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="listing_feature"><input type="hidden" name="ltype" value="<?= $lt ?>"><input type="hidden" name="id" value="<?= $l['id'] ?>">
             <button><?= $l['is_featured'] ? '★ Featured' : '☆ Feature' ?></button></form>
         </td>
         <td class="row-actions">
           <?php foreach ([['active', '✅'], ['rejected', '❌'], ['paused', '⏸']] as [$s, $lbl]): if ($l['status'] !== $s): ?>
+            <?php if ($s === 'rejected') continue; ?>
             <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="listing_status"><input type="hidden" name="ltype" value="<?= $lt ?>"><input type="hidden" name="id" value="<?= $l['id'] ?>"><input type="hidden" name="status" value="<?= $s ?>"><button title="<?= $s ?>"><?= $lbl ?></button></form>
           <?php endif; endforeach; ?>
+          <?php if ($l['status'] !== 'rejected'): ?>
+          <details class="reject-popover">
+            <summary title="Reject">Reject</summary>
+            <form method="post" class="reject-form">
+              <?= csrf_field() ?>
+              <input type="hidden" name="do" value="listing_status">
+              <input type="hidden" name="ltype" value="<?= $lt ?>">
+              <input type="hidden" name="id" value="<?= $l['id'] ?>">
+              <input type="hidden" name="status" value="rejected">
+              <select name="rejection_reason">
+                <?php foreach ($rejectReasons as $key => $instruction): ?>
+                  <option value="<?= e($key) ?>"><?= e(ucfirst(str_replace('_', ' ', $key))) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <input name="rejection_note" placeholder="Correction note for seller">
+              <button>Reject listing</button>
+            </form>
+          </details>
+          <?php endif; ?>
         </td>
       </tr>
       <?php endforeach; ?>
@@ -381,6 +596,64 @@ include __DIR__ . '/../views/layout_top.php';
       </form>
     </div>
     <?php endforeach; ?>
+
+  <?php elseif ($section === 'support'): ?>
+    <h1>Support queue</h1>
+    <?php if (!db_table_exists('support_tickets')): ?>
+      <div role="alert" class="alert alert-warning">Run the latest database upgrade to enable support tickets.</div>
+    <?php else: ?>
+      <?php $list = rows("SELECT st.*, u.full_name, u.phone user_phone, u.email user_email, a.full_name assigned_admin
+          FROM support_tickets st
+          JOIN users u ON u.id = st.user_id
+          LEFT JOIN users a ON a.id = st.assigned_admin_id
+          ORDER BY FIELD(st.status, 'open', 'waiting_user', 'escalated', 'resolved', 'closed'), FIELD(st.priority, 'high', 'normal', 'low'), st.created_at DESC
+          LIMIT 200"); ?>
+      <?php if (!$list): ?><div class="empty-state">No support tickets. 🎉</div><?php endif; ?>
+      <?php foreach ($list as $t): ?>
+        <div class="panel">
+          <div class="review-head">
+            <strong>#<?= (int)$t['id'] ?> · <?= e($t['subject']) ?></strong>
+            <span class="badge badge-status-<?= e($t['status']) ?>"><?= e(str_replace('_', ' ', $t['status'])) ?></span>
+            <span class="badge badge-muted"><?= e($t['priority']) ?></span>
+            <span class="muted">by <?= e($t['full_name']) ?> · <?= time_ago($t['created_at']) ?></span>
+          </div>
+          <p><?= nl2br(e($t['message'])) ?></p>
+          <p class="muted small">
+            <?= e(str_replace('_', ' ', $t['category'])) ?>
+            <?php if ($t['phone']): ?> · callback <?= e($t['phone']) ?><?php endif; ?>
+            <?php if ($t['preferred_callback_at']): ?> · preferred <?= e($t['preferred_callback_at']) ?><?php endif; ?>
+            <?php if ($t['related_type']): ?> · related <?= e($t['related_type']) ?> #<?= (int)$t['related_id'] ?><?php endif; ?>
+            <?php if ($t['assigned_admin']): ?> · assigned <?= e($t['assigned_admin']) ?><?php endif; ?>
+            <?php if ($t['report_id']): ?> · <a href="<?= url('admin/reports') ?>">report #<?= (int)$t['report_id'] ?></a><?php endif; ?>
+          </p>
+          <form method="post" class="inq-status-form">
+            <?= csrf_field() ?><input type="hidden" name="do" value="support_update"><input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+            <select name="status">
+              <?php foreach (['open', 'waiting_user', 'escalated', 'resolved', 'closed'] as $s): ?><option value="<?= $s ?>" <?= $t['status'] === $s ? 'selected' : '' ?>><?= str_replace('_', ' ', $s) ?></option><?php endforeach; ?>
+            </select>
+            <select name="priority">
+              <?php foreach (['low', 'normal', 'high'] as $p): ?><option value="<?= $p ?>" <?= $t['priority'] === $p ? 'selected' : '' ?>><?= $p ?></option><?php endforeach; ?>
+            </select>
+            <input name="admin_note" placeholder="Support note / reply" value="<?= e($t['admin_note'] ?? '') ?>">
+            <button class="btn btn-outline btn-sm">Save</button>
+          </form>
+          <?php if (!$t['report_id']): ?>
+            <details class="reject-popover">
+              <summary>Escalate to moderation</summary>
+              <form method="post" class="reject-form">
+                <?= csrf_field() ?><input type="hidden" name="do" value="support_escalate"><input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                <select name="reported_type">
+                  <?php foreach (['product', 'service', 'supply', 'business', 'video', 'review', 'user'] as $rt): ?><option value="<?= $rt ?>" <?= $t['related_type'] === $rt ? 'selected' : '' ?>><?= $rt ?></option><?php endforeach; ?>
+                </select>
+                <input type="number" name="reported_id" min="1" value="<?= in_array($t['related_type'], ['product','service','supply','business','video','review','user'], true) ? (int)$t['related_id'] : '' ?>" placeholder="Target ID">
+                <input name="admin_note" placeholder="Escalation note">
+                <button>Escalate</button>
+              </form>
+            </details>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+    <?php endif; ?>
 
   <?php elseif ($section === 'inquiries'): ?>
     <h1>All Inquiries (lead tracking)</h1>
@@ -481,7 +754,21 @@ include __DIR__ . '/../views/layout_top.php';
         <td><span class="badge badge-status-<?= e($p['status']) ?>"><?= e($p['status']) ?></span></td>
         <td class="small"><?= $p['starts_at'] ? date('M j', strtotime($p['starts_at'])) . ' – ' . date('M j', strtotime($p['ends_at'])) : '— (activates on payment confirm)' ?></td>
         <td class="row-actions">
-          <?php if (in_array($p['status'], ['pending', 'active'], true)): ?>
+          <?php if (in_array($p['status'], ['pending', 'scheduled', 'active', 'paused'], true)): ?>
+            <details class="reject-popover">
+              <summary>Manage</summary>
+              <form method="post" class="reject-form">
+                <?= csrf_field() ?><input type="hidden" name="do" value="promo_update"><input type="hidden" name="id" value="<?= $p['id'] ?>">
+                <select name="status">
+                  <?php foreach (['active' => 'Activate now', 'scheduled' => 'Schedule', 'paused' => 'Pause', 'cancelled' => 'Cancel'] as $s => $label): ?>
+                    <option value="<?= $s ?>"><?= $label ?></option>
+                  <?php endforeach; ?>
+                </select>
+                <input type="datetime-local" name="starts_at" value="<?= $p['starts_at'] ? date('Y-m-d\TH:i', strtotime($p['starts_at'])) : '' ?>">
+                <button>Save</button>
+              </form>
+              <p class="muted small">Activation only works when the target is approved and live.</p>
+            </details>
             <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="promo_stop"><input type="hidden" name="id" value="<?= $p['id'] ?>"><button>⏹ Stop</button></form>
           <?php endif; ?>
         </td>
@@ -646,8 +933,8 @@ include __DIR__ . '/../views/layout_top.php';
             <?php $next = $a['status'] === 'active' ? [['paused', '⏸']] : [['active', '▶️']]; $next[] = ['archived', '🗄']; ?>
             <?php foreach ($next as [$s, $lbl]): ?>
               <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="ad_status"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="status" value="<?= $s ?>"><button title="<?= $s ?>"><?= $lbl ?></button></form>
-            <?php endforeach; ?>
-          </td>
+          <?php endforeach; ?>
+        </td>
         </tr>
         <?php endforeach; ?>
       </table></div>
@@ -1476,26 +1763,58 @@ include __DIR__ . '/../views/layout_top.php';
     <h1>Users</h1>
     <?php $list = rows("SELECT * FROM users ORDER BY created_at DESC LIMIT 300"); ?>
     <div class="table-wrap"><table class="data-table">
-      <tr><th>Name</th><th>Phone</th><th>Email</th><th>Type</th><th>Status</th><th>Joined</th><th>Actions</th></tr>
+      <tr><th>Name</th><th>Phone</th><th>Email</th><th>Type</th><th>Status</th><th>Sanction / Appeal</th><th>Joined</th><th>Actions</th></tr>
       <?php foreach ($list as $usr): ?>
+      <?php $sanction = active_account_sanction((int)$usr['id']); ?>
       <tr>
         <td><?= e($usr['full_name']) ?></td>
         <td><?= e($usr['phone']) ?></td>
         <td><?= e($usr['email'] ?: '—') ?></td>
         <td><?= e($usr['account_type']) ?></td>
         <td><span class="badge badge-status-<?= e($usr['status']) ?>"><?= e($usr['status']) ?></span></td>
+        <td class="small">
+          <?php if ($sanction): ?>
+            <strong><?= e($sanction['level']) ?></strong> · <?= e(str_replace('_', ' ', $sanction['reason'])) ?>
+            <?php if ($sanction['appeal_status'] === 'pending'): ?>
+              <form method="post" class="sanction-review-form">
+                <?= csrf_field() ?>
+                <input type="hidden" name="do" value="sanction_appeal">
+                <input type="hidden" name="sanction_id" value="<?= $sanction['id'] ?>">
+                <textarea name="appeal_response" rows="2" placeholder="Appeal response"><?= e($sanction['appeal_message']) ?></textarea>
+                <button name="appeal_status" value="approved">Approve appeal</button>
+                <button name="appeal_status" value="rejected">Reject appeal</button>
+              </form>
+            <?php elseif ($sanction['appeal_status'] !== 'none'): ?>
+              <br><span class="badge badge-muted">appeal <?= e($sanction['appeal_status']) ?></span>
+            <?php endif; ?>
+          <?php else: ?>—<?php endif; ?>
+        </td>
         <td><?= date('M j, Y', strtotime($usr['created_at'])) ?></td>
         <td class="row-actions">
           <?php if ($usr['id'] != $u['id'] && !in_array($usr['account_type'], ['admin', 'super_admin'])): ?>
-            <?php foreach ([['active', '✅'], ['suspended', '⏸'], ['banned', '🚫']] as [$s, $lbl]): if ($usr['status'] !== $s): ?>
-              <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="user_status"><input type="hidden" name="id" value="<?= $usr['id'] ?>"><input type="hidden" name="status" value="<?= $s ?>"><button title="<?= $s ?>"><?= $lbl ?></button></form>
+            <?php if ($usr['status'] !== 'active'): ?>
+              <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="user_status"><input type="hidden" name="id" value="<?= $usr['id'] ?>"><input type="hidden" name="status" value="active"><button title="restore">Restore</button></form>
+            <?php endif; ?>
+            <?php foreach ([['suspended', 'Suspend'], ['banned', 'Ban']] as [$s, $lbl]): if ($usr['status'] !== $s): ?>
+              <details class="reject-popover">
+                <summary><?= e($lbl) ?></summary>
+                <form method="post" class="reject-form">
+                  <?= csrf_field() ?><input type="hidden" name="do" value="user_status"><input type="hidden" name="id" value="<?= $usr['id'] ?>"><input type="hidden" name="status" value="<?= $s ?>">
+                  <select name="sanction_reason">
+                    <?php foreach (['policy_violation' => 'Policy violation', 'fraud' => 'Fraud/scam', 'spam' => 'Spam', 'abuse' => 'Abuse/harassment', 'payment_fraud' => 'Payment fraud', 'repeat_offender' => 'Repeat offender'] as $rk => $rv): ?>
+                      <option value="<?= e($rk) ?>"><?= e($rv) ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                  <input name="admin_note" placeholder="Note shown in appeal context">
+                  <button><?= e($lbl) ?> user</button>
+                </form>
+              </details>
             <?php endif; endforeach; ?>
           <?php endif; ?>
         </td>
       </tr>
       <?php endforeach; ?>
     </table></div>
-
   <?php elseif ($section === 'categories'): ?>
     <h1>Categories</h1>
     <form method="post" class="panel form-inline">
@@ -1507,7 +1826,7 @@ include __DIR__ . '/../views/layout_top.php';
     </form>
     <?php $list = rows("SELECT * FROM categories ORDER BY type, sort_order"); ?>
     <div class="table-wrap"><table class="data-table">
-      <tr><th>Icon</th><th>Name</th><th>Type</th><th>Slug</th><th>Status</th><th></th></tr>
+      <tr><th>Icon</th><th>Name</th><th>Type</th><th>Slug</th><th>Status</th><th></th><th></th></tr>
       <?php foreach ($list as $c): ?>
       <tr>
         <td><?= $c['icon'] ?></td>
@@ -1516,6 +1835,77 @@ include __DIR__ . '/../views/layout_top.php';
         <td class="muted"><?= e($c['slug']) ?></td>
         <td><span class="badge badge-status-<?= $c['status'] === 'active' ? 'active' : 'closed' ?>"><?= e($c['status']) ?></span></td>
         <td><form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="cat_toggle"><input type="hidden" name="id" value="<?= $c['id'] ?>"><button><?= $c['status'] === 'active' ? 'Disable' : 'Enable' ?></button></form></td>
+        <td><a href="<?= url('admin/categories') ?>?cat=<?= $c['id'] ?>">Attributes</a></td>
+      </tr>
+      <?php endforeach; ?>
+    </table></div>
+
+    <?php if ($attrCat = (int)($_GET['cat'] ?? 0)): $attrCatRow = row("SELECT * FROM categories WHERE id = ?", [$attrCat]); if ($attrCatRow): ?>
+    <div class="panel">
+      <h3>Attributes for "<?= e($attrCatRow['name']) ?>"</h3>
+      <p class="muted small">These drive the extra fields vendors fill in when posting a listing in this category, and the filters shown on its browse page — beyond the fixed fields (material, brand, color, dimensions, ...) every listing already has.</p>
+      <?php $attrs = category_attributes($attrCat); ?>
+      <?php if ($attrs): ?>
+      <div class="table-wrap"><table class="data-table">
+        <tr><th>Key</th><th>Label</th><th>Type</th><th>Options</th><th>Unit</th><th>Required</th><th>Filterable</th><th>Order</th><th></th></tr>
+        <?php foreach ($attrs as $a): ?>
+        <tr>
+          <td class="muted"><?= e($a['key_name']) ?></td>
+          <td><?= e($a['label']) ?></td>
+          <td><?= e($a['input_type']) ?></td>
+          <td class="small"><?= e(implode(', ', json_decode($a['options'] ?? '[]', true) ?: [])) ?></td>
+          <td><?= e($a['unit'] ?? '') ?></td>
+          <td><?= $a['is_required'] ? 'Yes' : 'No' ?></td>
+          <td><?= $a['is_filterable'] ? 'Yes' : 'No' ?></td>
+          <td><?= (int)$a['sort_order'] ?></td>
+          <td><form method="post" onsubmit="return confirm('Remove this attribute? Values already saved on listings are kept but will no longer display.')">
+            <?= csrf_field() ?><input type="hidden" name="do" value="attr_delete"><input type="hidden" name="id" value="<?= $a['id'] ?>"><button>Remove</button></form></td>
+        </tr>
+        <?php endforeach; ?>
+      </table></div>
+      <?php else: ?><p class="muted">No attributes defined yet for this category.</p><?php endif; ?>
+
+      <form method="post" class="form-2col section-gap">
+        <?= csrf_field() ?><input type="hidden" name="do" value="attr_add"><input type="hidden" name="category_id" value="<?= $attrCat ?>">
+        <label>Key <input name="key_name" placeholder="seating_capacity" required></label>
+        <label>Label <input name="label" placeholder="Seating capacity"></label>
+        <label>Input type
+          <select name="input_type" onchange="this.form.querySelector('[name=options]').closest('label').style.display = this.value === 'select' ? '' : 'none'">
+            <option value="text">Text</option>
+            <option value="number">Number</option>
+            <option value="select">Select (one of a list)</option>
+            <option value="boolean">Yes / No</option>
+          </select>
+        </label>
+        <label style="display:none">Options (comma-separated) <input name="options" placeholder="2-seater, 3-seater, corner"></label>
+        <label>Unit <input name="unit" placeholder="cm, kg, seats"></label>
+        <label>Sort order <input type="number" name="sort_order" value="0"></label>
+        <div class="check-row">
+          <label class="check"><input type="checkbox" name="is_required"> Required</label>
+          <label class="check"><input type="checkbox" name="is_filterable" checked> Filterable on browse</label>
+        </div>
+        <div class="span2"><button class="btn btn-primary">Add / update attribute</button></div>
+      </form>
+    </div>
+    <?php endif; endif; ?>
+
+  <?php elseif ($section === 'search_synonyms'): ?>
+    <h1>🔤 Search Synonyms</h1>
+    <p class="muted">Latin↔Amharic word pairs so a search for either finds listings written in the other (e.g. "wenber" also finds ወንበር). Curated marketplace vocabulary, not automatic transliteration — add pairs as real customer search terms come up.</p>
+    <form method="post" class="panel form-inline">
+      <?= csrf_field() ?><input type="hidden" name="do" value="synonym_add">
+      <input name="latin_term" placeholder="Latin, e.g. wenber" required>
+      <input name="amharic_term" placeholder="Amharic, e.g. ወንበር" required>
+      <button class="btn btn-primary">Add pair</button>
+    </form>
+    <?php $synonyms = rows("SELECT * FROM search_synonyms ORDER BY latin_term"); ?>
+    <div class="table-wrap"><table class="data-table">
+      <tr><th>Latin</th><th>Amharic</th><th></th></tr>
+      <?php foreach ($synonyms as $s): ?>
+      <tr>
+        <td><?= e($s['latin_term']) ?></td>
+        <td><?= e($s['amharic_term']) ?></td>
+        <td><form method="post" onsubmit="return confirm('Remove this synonym pair?')"><?= csrf_field() ?><input type="hidden" name="do" value="synonym_delete"><input type="hidden" name="id" value="<?= $s['id'] ?>"><button>Remove</button></form></td>
       </tr>
       <?php endforeach; ?>
     </table></div>

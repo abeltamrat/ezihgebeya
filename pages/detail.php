@@ -93,7 +93,7 @@ $u = auth();
 $isFav = $u && $type === 'product' && val("SELECT COUNT(*) FROM favorites WHERE user_id = ? AND product_id = ?", [$u['id'], $item['id']]);
 
 $inquiryType = ['product' => 'product_inquiry', 'service' => 'service_quote_request', 'supply' => 'supply_order_request'][$type];
-$postLikePath = is_vendor($u) ? "vendor/listings/$type/new?category_id=" . (int)$item['category_id'] : ($u ? 'account' : 'register');
+$postLikePath = is_vendor($u) ? "app/vendor/listings/$type/new?category_id=" . (int)$item['category_id'] : ($u ? 'account' : 'register');
 $similar = rows("SELECT l.*, b.business_name b_name, b.verification_status b_verification, c.name c_name, c.icon c_icon
     FROM `$table` l JOIN businesses b ON b.id = l.business_id JOIN categories c ON c.id = l.category_id
     WHERE l.status = 'active' AND b.status = 'active' AND l.category_id = ? AND l.id != ?

@@ -52,6 +52,7 @@ export interface Listing {
   type: ListingType;
   title: string;
   slug: string;
+  public_url: string;
   category_id: number;
   category_name: string | null;
   description: string;

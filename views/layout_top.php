@@ -12,7 +12,7 @@ $currentRoute = $requestPath === '' ? '' : explode('/', $requestPath)[0];
 $navState = function (string $route) use ($currentRoute): string {
     return $currentRoute === $route ? ' class="is-active" aria-current="page"' : '';
 };
-$sellUrl = !$u ? 'register' : (is_vendor($u) ? 'vendor/listings/product/new' : 'account');
+$sellUrl = !$u ? 'register' : (is_vendor($u) ? 'app/vendor/listings/product/new' : 'account');
 $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
 ?>
 <!DOCTYPE html>
@@ -122,7 +122,7 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
       <?php if (!$u): ?>
         <a href="<?= url('login') ?>">Login</a>
       <?php else: ?>
-        <?php $dashUrl = is_admin($u) ? 'admin' : (is_vendor($u) ? 'vendor' : 'account'); ?>
+        <?php $dashUrl = is_admin($u) ? 'admin' : (is_vendor($u) ? 'app/vendor' : 'account'); ?>
         <a href="<?= url($sellUrl) ?>" class="btn btn-primary btn-sm nav-sell-btn"><?= system_ui_icon('shop', 'Sell') ?> <?= e($sellLabel) ?><?= system_ui_button_badge('join') ?></a>
         <div class="dropdown dropdown-end">
           <div tabindex="0" role="button" class="btn btn-ghost btn-sm gap-2 px-2">
@@ -138,7 +138,7 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
             <li class="menu-title text-xs opacity-60 pb-1"><?= e($u['full_name']) ?></li>
             <li><a href="<?= url($dashUrl) ?>"><?= system_ui_icon('user', '') ?> <?= is_admin($u) ? 'Admin panel' : (is_vendor($u) ? 'Dashboard' : 'My account') ?><?= system_ui_button_badge('account') ?></a></li>
             <?php if (is_vendor($u)): ?>
-            <li><a href="<?= url('vendor/listings/product/new') ?>">➕ Add listing</a></li>
+            <li><a href="<?= url('app/vendor/listings/product/new') ?>">➕ Add listing</a></li>
             <?php endif; ?>
             <li><a href="<?= url('notifications') ?>"><?= system_ui_icon('bell', '') ?> Notifications<?php $nb = unread_notifications((int)$u['id']); if ($nb): ?><span class="badge badge-primary badge-sm"><?= $nb ?></span><?php endif; ?></a></li>
             <?php if (feature_enabled('cart')): ?>

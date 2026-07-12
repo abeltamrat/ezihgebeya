@@ -60,6 +60,7 @@ export function VendorListings() {
                   <td>{l.views}</td>
                   <td>{l.inquiries}</td>
                   <td style={{ display: 'flex', gap: 8 }}>
+                    <a href={l.public_url}>View</a>
                     <Link to={`/vendor/listings/${ltype}/${l.id}/edit`}>Edit</Link>
                     <button
                       className="btn btn-outline"

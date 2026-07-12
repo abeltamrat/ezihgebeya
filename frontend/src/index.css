@@ -95,6 +95,56 @@ h2 { font-size: 1.2rem; }
 .small { font-size: .82rem; }
 
 /* dashboard shell */
+.app-shellbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,.96);
+  border: 1px solid rgba(228,231,236,.92);
+  border-radius: var(--r);
+  box-shadow: 0 12px 34px -30px rgba(16,24,40,.5);
+}
+.app-brand {
+  display: block;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 900;
+  line-height: 1.2;
+  text-decoration: none;
+}
+.app-shelllinks {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.app-shelllinks a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: .84rem;
+  font-weight: 800;
+  text-decoration: none;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+}
+.app-shelllinks a:hover { background: var(--surface-2); color: var(--brand-dark); }
+.app-shelllinks .danger-link { color: var(--red); }
+.mini-pill {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--brand);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 900;
+  text-align: center;
+}
 .dash-layout { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: start; }
 .dash-nav, .panel, .table-wrap {
   background: rgba(255,255,255,.96);
@@ -153,6 +203,8 @@ label input, label select, label textarea { display: block; width: 100%; margin-
 
 /* mobile: kept last so it wins the cascade over the desktop rules above at matching widths */
 @media (max-width: 760px) {
+  .app-shellbar { align-items: flex-start; flex-direction: column; }
+  .app-shelllinks { justify-content: flex-start; }
   .dash-layout { grid-template-columns: 1fr; }
   .dash-nav { position: static; flex-direction: row; flex-wrap: wrap; }
   .section { padding: 20px 14px; }

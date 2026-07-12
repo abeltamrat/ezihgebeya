@@ -52,6 +52,45 @@ function v1_csrf_check(array $body): void {
     }
 }
 
+/** Shared shell state for the React app.
+ * This mirrors the PHP header's session-derived state so /app/* does not need a
+ * second auth, notification, or cart source of truth.
+ */
+function v1_shell_state(?array $u): array {
+    $cartEnabled = feature_enabled('cart');
+    $shell = [
+        'home_url' => url(''),
+        'browse_url' => url('products'),
+        'cart_url' => url('cart'),
+        'cart_count' => $cartEnabled ? cart_count() : 0,
+        'cart_enabled' => $cartEnabled,
+        'sell_url' => url($u && is_vendor($u) ? 'app/vendor/listings/product/new' : 'register'),
+        'sell_label' => $u && is_vendor($u) ? 'Post listing' : 'Sell / Join',
+    ];
+
+    if (!$u) {
+        return $shell + [
+            'login_url' => url('login'),
+            'register_url' => url('register'),
+            'authenticated' => false,
+        ];
+    }
+
+    $accountPath = is_admin($u) ? 'admin' : (is_vendor($u) ? 'app/vendor' : 'account');
+    $biz = is_vendor($u) ? my_business($u) : null;
+
+    return $shell + [
+        'authenticated' => true,
+        'account_url' => url($accountPath),
+        'account_label' => is_admin($u) ? 'Admin panel' : (is_vendor($u) ? 'Dashboard' : 'My account'),
+        'notifications_url' => url('notifications'),
+        'notification_count' => unread_notifications((int)$u['id']),
+        'logout_url' => url('logout'),
+        'business_profile_url' => is_vendor($u) ? url('vendor/business') : null,
+        'public_business_url' => $biz && !empty($biz['slug']) ? url('businesses/' . $biz['slug']) : null,
+    ];
+}
+
 $method = $_SERVER['REQUEST_METHOD'];
 $r0 = $apiSeg[0] ?? '';
 $body = str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'application/json')
@@ -67,12 +106,12 @@ if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
 // CSRF token it must echo back on every mutation for the rest of the page lifetime.
 if ($r0 === 'me' && $method === 'GET') {
     $u = v1_user();
-    if (!$u) api_out(['ok' => true, 'authenticated' => false, 'csrf_token' => csrf_token()]);
+    if (!$u) api_out(['ok' => true, 'authenticated' => false, 'csrf_token' => csrf_token(), 'shell' => v1_shell_state(null)]);
     api_out(['ok' => true, 'authenticated' => true, 'csrf_token' => csrf_token(), 'user' => [
         'id' => (int)$u['id'], 'name' => $u['full_name'], 'phone' => $u['phone'],
         'email' => $u['email'], 'account_type' => $u['account_type'],
         'phone_verified' => (bool)$u['phone_verified_at'],
-    ]]);
+    ], 'shell' => v1_shell_state($u)]);
 }
 
 // ================== Phase 2 React pilot: vendor dashboard + listing management ==================
@@ -88,11 +127,13 @@ if (str_starts_with($r0, 'vendor')) {
 /** Serialize a listing row for the API, decoding its attributes JSON and normalizing the
  * title/price fields that differ by listing type into one predictable shape. */
 function v1_listing_out(string $type, array $l): array {
+    $publicBase = ['product' => 'products', 'service' => 'services', 'supply' => 'supplies'][$type];
     return [
         'id' => (int)$l['id'],
         'type' => $type,
         'title' => $l[listing_title_col($type)],
         'slug' => $l['slug'],
+        'public_url' => url($publicBase . '/' . $l['slug']),
         'category_id' => (int)$l['category_id'],
         'category_name' => $l['c_name'] ?? null,
         'description' => $l['description'],

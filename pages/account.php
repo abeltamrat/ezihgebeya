@@ -11,16 +11,21 @@ $myReviews = rows("SELECT r.*, b.business_name FROM reviews r JOIN businesses b 
     WHERE r.reviewer_id = ? ORDER BY r.created_at DESC LIMIT 50", [$u['id']]);
 include __DIR__ . '/../views/layout_top.php';
 ?>
-<div class="container section">
+<div class="container section account-page">
   <h1>Hi, <?= e($u['full_name']) ?> 👋</h1>
   <p class="muted"><?= ucfirst(str_replace('_', ' ', $u['account_type'])) ?> account · <?= e($u['phone']) ?>
     <?= $u['phone_verified_at'] ? '<span class="badge badge-verified">✔ phone verified</span>' : '' ?></p>
   <?php if (!$u['phone_verified_at']): ?>
-    <div class="flash flash-error">Your phone number is not verified yet. <a href="<?= url('verify') ?>">Verify now</a> to secure your account.</div>
+    <div role="alert" class="alert alert-warning mb-3">
+      <span>Your phone number is not verified yet. <a class="link font-bold" href="<?= url('verify') ?>">Verify now</a> to secure your account.</span>
+    </div>
   <?php endif; ?>
   <div class="btn-row">
+    <a class="btn btn-ghost" href="<?= url('support') ?>">Support</a>
+    <a class="btn btn-ghost" href="<?= url('account/saved-searches') ?>">Saved searches</a>
     <a class="btn btn-outline" href="<?= url('account/orders') ?>">📦 My Orders (<?= (int)val("SELECT COUNT(*) FROM orders WHERE customer_id = ?", [$u['id']]) ?>)</a>
     <a class="btn btn-ghost" href="<?= url('cart') ?>">🛒 Cart (<?= cart_count() ?>)</a>
+    <a class="btn btn-ghost" href="<?= url('account/settings') ?>">⚙️ Settings</a>
   </div>
 
   <h2 class="section-gap">Saved products (<?= count($favs) ?>)</h2>

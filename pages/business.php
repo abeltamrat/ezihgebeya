@@ -7,6 +7,8 @@ if (!$biz) { http_response_code(404); $pageTitle = 'Not found'; include __DIR__ 
 
 $pageTitle = $biz['business_name'];
 $pageDesc = mb_substr(strip_tags($biz['description'] ?? ''), 0, 150);
+$canonical = 'businesses/' . $biz['slug'];
+$ogType = 'business.business';
 
 $sel = fn($t) => rows("SELECT l.*, b.business_name b_name, b.verification_status b_verification, c.name c_name, c.icon c_icon
     FROM $t l JOIN businesses b ON b.id = l.business_id JOIN categories c ON c.id = l.category_id
@@ -17,6 +19,45 @@ $supplies = $sel('supplies');
 $videos = rows("SELECT * FROM video_posts WHERE business_id = ? AND status = 'approved' ORDER BY created_at DESC LIMIT 6", [$biz['id']]);
 $bizReviews = rows("SELECT r.*, u.full_name FROM reviews r JOIN users u ON u.id = r.reviewer_id
     WHERE r.business_id = ? AND r.status = 'approved' ORDER BY r.created_at DESC LIMIT 10", [$biz['id']]);
+$responseLabel = response_time_label(business_response_median_minutes((int)$biz['id']));
+$activityLabel = business_recent_activity_label((int)$biz['id']);
+$localBusinessJsonLd = [
+    '@type' => 'LocalBusiness',
+    '@id' => absolute_url(url('businesses/' . $biz['slug'])) . '#business',
+    'name' => $biz['business_name'],
+    'description' => mb_substr(strip_tags($biz['description'] ?? ''), 0, 300),
+    'url' => absolute_url(url('businesses/' . $biz['slug'])),
+    'telephone' => $biz['phone'] ?: null,
+    'email' => $biz['email'] ?: null,
+    'image' => $biz['logo'] ? absolute_url(img_url($biz['logo'])) : null,
+    'address' => [
+        '@type' => 'PostalAddress',
+        'streetAddress' => trim(implode(', ', array_filter([$biz['area_name'], $biz['address']]))),
+        'addressLocality' => $biz['subcity'] ?: $biz['city'],
+        'addressRegion' => $biz['city'],
+        'addressCountry' => 'ET',
+    ],
+];
+if ($biz['latitude'] && $biz['longitude']) {
+    $localBusinessJsonLd['geo'] = ['@type' => 'GeoCoordinates', 'latitude' => (float)$biz['latitude'], 'longitude' => (float)$biz['longitude']];
+}
+if ((float)$biz['rating_average'] > 0) {
+    $localBusinessJsonLd['aggregateRating'] = [
+        '@type' => 'AggregateRating',
+        'ratingValue' => (float)$biz['rating_average'],
+        'reviewCount' => max(1, (int)$biz['rating_count']),
+    ];
+}
+$breadcrumbJsonLd = [
+    '@type' => 'BreadcrumbList',
+    'itemListElement' => [
+        ['@type' => 'ListItem', 'position' => 1, 'name' => 'Home', 'item' => absolute_url(url(''))],
+        ['@type' => 'ListItem', 'position' => 2, 'name' => 'Businesses', 'item' => absolute_url(url('businesses/' . $biz['slug']))],
+        ['@type' => 'ListItem', 'position' => 3, 'name' => $biz['business_name'], 'item' => absolute_url(url('businesses/' . $biz['slug']))],
+    ],
+];
+$jsonLd = ['@context' => 'https://schema.org', '@graph' => [array_filter($localBusinessJsonLd, fn($v) => $v !== null && $v !== ''), $breadcrumbJsonLd]];
+$ogImage = $biz['logo'] ? absolute_url(img_url($biz['logo'])) : ($biz['cover_image'] ? absolute_url(img_url($biz['cover_image'])) : null);
 $u = auth();
 include __DIR__ . '/../views/layout_top.php';
 ?>
@@ -32,6 +73,8 @@ include __DIR__ . '/../views/layout_top.php';
         <?php $rr = business_response_rate((int)$biz['id']); if ($rr !== null): ?>
           <span class="badge badge-muted" title="Share of inquiries this seller responds to">💬 responds to <?= $rr ?>%</span>
         <?php endif; ?>
+        <?php if ($responseLabel): ?><span class="badge badge-muted"><?= e($responseLabel) ?></span><?php endif; ?>
+        <?php if ($activityLabel): ?><span class="badge badge-muted"><?= e($activityLabel) ?></span><?php endif; ?>
       </div>
     </div>
     <div class="biz-actions">

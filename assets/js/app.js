@@ -125,10 +125,130 @@
 
   // ── PWA service worker ───────────────────────────────────────────────────
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register((window.AK_BASE || '/ezihgebeya') + '/sw.js').catch(function () {});
+    navigator.serviceWorker.register((window.AK_BASE || '/ezihgebeya') + '/sw.js', { updateViaCache: 'none' })
+      .then(function (registration) {
+        if (document.visibilityState === 'visible') registration.update().catch(function () {});
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') registration.update().catch(function () {});
+        });
+      })
+      .catch(function () {});
   }
 
+  var deferredInstallPrompt = null;
+  var installPrompt = document.getElementById('install-prompt');
+  var installAccept = document.getElementById('install-prompt-accept');
+  var installDismiss = document.getElementById('install-prompt-dismiss');
+  var installDismissedUntil = parseInt(localStorage.getItem('eg_install_dismissed_until') || '0', 10);
+  window.addEventListener('beforeinstallprompt', function (e) {
+    if (!installPrompt || Date.now() < installDismissedUntil) return;
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installPrompt.hidden = false;
+  });
+  if (installAccept) installAccept.addEventListener('click', function () {
+    if (!deferredInstallPrompt) return;
+    installPrompt.hidden = true;
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.finally(function () { deferredInstallPrompt = null; });
+  });
+  if (installDismiss) installDismiss.addEventListener('click', function () {
+    localStorage.setItem('eg_install_dismissed_until', String(Date.now() + 7 * 24 * 60 * 60 * 1000));
+    if (installPrompt) installPrompt.hidden = true;
+    deferredInstallPrompt = null;
+  });
+  window.addEventListener('appinstalled', function () {
+    if (installPrompt) installPrompt.hidden = true;
+    localStorage.setItem('eg_install_dismissed_until', String(Date.now() + 365 * 24 * 60 * 60 * 1000));
+  });
+
+  function announceConnectivity() {
+    if (!navigator.onLine) {
+      window.dispatchEvent(new CustomEvent('toast', { detail: { msg: 'You are offline. Browsing may be limited and actions need a connection.', type: 'warning' } }));
+      document.body.classList.add('is-offline');
+    } else {
+      if (document.body.classList.contains('is-offline')) {
+        window.dispatchEvent(new CustomEvent('toast', { detail: { msg: 'Back online.', type: 'success' } }));
+      }
+      document.body.classList.remove('is-offline');
+    }
+  }
+  window.addEventListener('offline', announceConnectivity);
+  window.addEventListener('online', announceConnectivity);
+  if (!navigator.onLine) announceConnectivity();
+
   // ── Ripple effect on .btn elements ───────────────────────────────────────
+  // Core Web Vitals / field performance telemetry. Native APIs only; no external library.
+  (function () {
+    if (!('PerformanceObserver' in window)) return;
+    var endpoint = (window.AK_BASE || '/ezihgebeya') + '/web-vitals';
+    var tokenEl = document.querySelector('meta[name="csrf-token"]');
+    var token = tokenEl ? tokenEl.content : '';
+    if (!token) return;
+    var pageKey = location.pathname + location.search;
+    var sent = {};
+    function rating(metric, value) {
+      var t = { LCP: [2500, 4000], CLS: [0.1, 0.25], INP: [200, 500], FID: [100, 300], FCP: [1800, 3000], TTFB: [800, 1800] }[metric] || [0, 0];
+      return value <= t[0] ? 'good' : (value <= t[1] ? 'needs-improvement' : 'poor');
+    }
+    function send(metric, value) {
+      if (!isFinite(value) || value < 0) return;
+      var once = 'eg_vital_' + metric + '_' + pageKey;
+      if (sent[metric] || sessionStorage.getItem(once)) return;
+      sent[metric] = true;
+      sessionStorage.setItem(once, '1');
+      var data = new FormData();
+      data.append('_token', token);
+      data.append('metric', metric);
+      data.append('value', metric === 'CLS' ? String(Math.round(value * 10000) / 10000) : String(Math.round(value)));
+      data.append('rating', rating(metric, value));
+      data.append('path', location.pathname);
+      data.append('page_type', document.body ? (document.body.dataset.pageType || document.body.className || '') : '');
+      data.append('connection', navigator.connection ? (navigator.connection.effectiveType || '') : '');
+      data.append('device_memory', navigator.deviceMemory || '');
+      data.append('viewport', window.innerWidth + 'x' + window.innerHeight);
+      if (navigator.sendBeacon) navigator.sendBeacon(endpoint, data);
+      else fetch(endpoint, { method: 'POST', body: data, credentials: 'same-origin', keepalive: true }).catch(function () {});
+    }
+    try {
+      var nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+      if (nav) setTimeout(function () { send('TTFB', nav.responseStart); }, 0);
+    } catch (e) {}
+    try {
+      new PerformanceObserver(function (list) {
+        var entries = list.getEntries();
+        var last = entries[entries.length - 1];
+        if (last) send('FCP', last.startTime);
+      }).observe({ type: 'paint', buffered: true });
+    } catch (e) {}
+    try {
+      new PerformanceObserver(function (list) {
+        var entries = list.getEntries();
+        var last = entries[entries.length - 1];
+        if (last) send('LCP', last.startTime);
+      }).observe({ type: 'largest-contentful-paint', buffered: true });
+    } catch (e) {}
+    try {
+      var cls = 0;
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (entry) { if (!entry.hadRecentInput) cls += entry.value; });
+      }).observe({ type: 'layout-shift', buffered: true });
+      addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') send('CLS', cls); });
+      addEventListener('pagehide', function () { send('CLS', cls); });
+    } catch (e) {}
+    try {
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (entry) { send('INP', entry.processingStart - entry.startTime); });
+      }).observe({ type: 'event', buffered: true, durationThreshold: 40 });
+    } catch (e) {}
+    try {
+      new PerformanceObserver(function (list) {
+        var first = list.getEntries()[0];
+        if (first) send('FID', first.processingStart - first.startTime);
+      }).observe({ type: 'first-input', buffered: true });
+    } catch (e) {}
+  })();
+
   function addRipple(e) {
     var btn = e.currentTarget;
     var rect = btn.getBoundingClientRect();

@@ -22,5 +22,18 @@ q("INSERT INTO video_events (video_post_id, user_id, session_id, event_type, wat
    VALUES (?,?,?,?,?,?,?)",
   [$vid, auth()['id'] ?? null, session_id(), $event, max(0, (int)($_POST['watched'] ?? 0)),
    $_SERVER['REMOTE_ADDR'] ?? null, mb_substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255)]);
+$v = row("SELECT business_id, linked_type, linked_id FROM video_posts WHERE id = ?", [$vid]);
+event_record($event === 'cta_click' ? 'video_cta_click' : 'video_view', [
+    'listing_type' => 'video',
+    'listing_id' => $vid,
+    'business_id' => $v['business_id'] ?? null,
+    'source' => 'video_feed',
+    'metadata' => [
+        'video_event' => $event,
+        'watched_seconds' => max(0, (int)($_POST['watched'] ?? 0)),
+        'linked_type' => $v['linked_type'] ?? null,
+        'linked_id' => $v['linked_id'] ?? null,
+    ],
+]);
 if ($event === 'view') q("UPDATE video_posts SET views_count = views_count + 1 WHERE id = ?", [$vid]);
 echo '{"ok":true}';

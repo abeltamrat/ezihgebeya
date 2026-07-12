@@ -9,7 +9,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     if (($_POST['do'] ?? '') === 'cancel') {
         $p = row("SELECT * FROM promotions WHERE id = ? AND business_id = ?", [(int)$_POST['id'], $biz['id']]);
-        if ($p && in_array($p['status'], ['pending', 'active'], true)) {
+        if ($p && in_array($p['status'], ['pending', 'scheduled', 'active', 'paused'], true)) {
             q("UPDATE promotions SET status = 'cancelled' WHERE id = ?", [$p['id']]);
             if ($p['status'] === 'active') promotion_apply($p, false);
             flash('Promotion cancelled.');
@@ -71,7 +71,7 @@ include __DIR__ . '/../views/layout_top.php';
   <div class="dash-main">
     <h1>📣 Promotions</h1>
     <p class="muted">Boost visibility: featured placement, top of search, homepage banner or video feed boost. Pay via Telebirr/CBE/bank and admin activates after confirming.</p>
-    <?php foreach ($errors as $er): ?><div class="flash flash-error"><?= e($er) ?></div><?php endforeach; ?>
+    <?php if ($errors): ?><div role="alert" class="alert alert-error mb-3"><ul class="list-disc list-inside text-sm"><?php foreach ($errors as $er): ?><li><?= e($er) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
 
     <form class="panel form-2col" method="post" enctype="multipart/form-data">
       <?= csrf_field() ?>
@@ -113,7 +113,7 @@ include __DIR__ . '/../views/layout_top.php';
         <td><span class="badge badge-status-<?= e($p['status']) ?>"><?= e($p['status']) ?></span></td>
         <td class="small"><?= $p['starts_at'] ? date('M j', strtotime($p['starts_at'])) . ' – ' . date('M j', strtotime($p['ends_at'])) : '—' ?></td>
         <td>
-          <?php if (in_array($p['status'], ['pending', 'active'], true)): ?>
+          <?php if (in_array($p['status'], ['pending', 'scheduled', 'active', 'paused'], true)): ?>
           <form method="post" onsubmit="return confirm('Cancel this promotion?')">
             <?= csrf_field() ?><input type="hidden" name="do" value="cancel"><input type="hidden" name="id" value="<?= $p['id'] ?>">
             <button class="btn btn-ghost btn-sm">Cancel</button>

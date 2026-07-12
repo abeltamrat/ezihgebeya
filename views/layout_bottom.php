@@ -6,13 +6,13 @@
      aria-live="polite"
      aria-atomic="false">
   <template x-for="toast in $store.toasts.items" :key="toast.id">
-    <div class="toast"
-         :class="'toast-' + toast.type"
+    <div class="alert"
+         :class="'alert-' + toast.type"
          x-show="true"
          x-transition:enter="toast-enter"
          x-transition:leave="toast-leave">
       <span class="toast-msg" x-text="toast.msg"></span>
-      <button class="toast-close" @click="$store.toasts.remove(toast.id)" aria-label="Dismiss">&times;</button>
+      <button class="btn btn-xs btn-circle btn-ghost" @click="$store.toasts.remove(toast.id)" aria-label="Dismiss">&times;</button>
     </div>
   </template>
 </div>
@@ -23,7 +23,7 @@
      @open-cart.window="open = true; $nextTick(() => { var b = $el.querySelector('.drawer-body'); if (b && !b.dataset.loaded) { htmx.trigger(b, 'load-cart'); b.dataset.loaded = '1'; } })"
      @keydown.escape.window="open = false">
 
-  <div class="drawer-overlay"
+  <div class="cart-drawer-overlay"
        x-show="open"
        x-cloak
        x-transition:enter="overlay-fade-enter"
@@ -31,7 +31,7 @@
        @click="open = false">
   </div>
 
-  <div class="drawer"
+  <div class="cart-drawer"
        x-show="open"
        x-cloak
        x-transition:enter="drawer-slide-enter"
@@ -50,15 +50,15 @@
       <!-- skeleton while loading -->
       <div class="skeleton-card" style="margin-bottom:12px">
         <div class="skeleton-body">
-          <div class="skeleton skeleton-line w-80"></div>
-          <div class="skeleton skeleton-line w-55"></div>
-          <div class="skeleton skeleton-line w-35"></div>
+          <div class="skeleton skeleton-line sk-w-80"></div>
+          <div class="skeleton skeleton-line sk-w-55"></div>
+          <div class="skeleton skeleton-line sk-w-35"></div>
         </div>
       </div>
       <div class="skeleton-card">
         <div class="skeleton-body">
-          <div class="skeleton skeleton-line w-80"></div>
-          <div class="skeleton skeleton-line w-55"></div>
+          <div class="skeleton skeleton-line sk-w-80"></div>
+          <div class="skeleton skeleton-line sk-w-55"></div>
         </div>
       </div>
     </div>
@@ -68,6 +68,17 @@
   </div>
 </div>
 <?php endif; ?>
+
+<div class="install-prompt" id="install-prompt" hidden>
+  <div>
+    <strong>Install <?= e(site_name()) ?></strong>
+    <span>Open faster from your home screen and keep shopping like an app.</span>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary btn-sm" type="button" id="install-prompt-accept">Install</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="install-prompt-dismiss">Not now</button>
+  </div>
+</div>
 
 <footer class="site-footer">
   <div class="container footer-grid">
@@ -96,6 +107,7 @@
       <a href="<?= url('contact') ?>">Contact</a>
       <a href="<?= url('terms') ?>">Terms of Service</a>
       <a href="<?= url('privacy') ?>">Privacy Policy</a>
+      <a href="<?= url('prohibited-items') ?>">Prohibited Items</a>
     </div>
     <div>
       <h4>Focus Cities</h4>
@@ -111,10 +123,13 @@ $mnPath = trim(str_replace(BASE_URL, '', parse_url($_SERVER['REQUEST_URI'], PHP_
 $mnCur = fn(string $p) => ($p === '' ? $mnPath === '' : str_starts_with($mnPath, $p)) ? 'current' : '';
 $mnUser = auth();
 $mnAccount = $mnUser ? (is_admin($mnUser) ? 'admin' : (is_vendor($mnUser) ? 'vendor' : 'account')) : 'login';
+$mnSell = !$mnUser ? 'register' : (is_vendor($mnUser) ? 'vendor/listings/product/new' : 'account');
+$mnSellLabel = is_vendor($mnUser) ? 'Post' : 'Sell';
 ?>
 <nav class="mobile-nav" aria-label="Mobile">
   <a href="<?= url('') ?>" class="<?= $mnCur('') ?>"><span class="mn-icon"><?= system_ui_icon('home', 'Home') ?></span>Home</a>
   <a href="<?= url('products') ?>" class="<?= $mnCur('products') ?>"><span class="mn-icon"><?= system_ui_icon('shop', 'Shop') ?></span>Shop</a>
+  <a href="<?= url($mnSell) ?>" class="mobile-sell <?= $mnCur($mnSell) ?>"><span class="mn-icon">+</span><?= e($mnSellLabel) ?></a>
   <?php if (feature_enabled('videos')): ?><a href="<?= url('videos') ?>" class="<?= $mnCur('videos') ?>"><span class="mn-icon"><?= system_ui_icon('play', 'Videos') ?></span>Videos</a><?php endif; ?>
   <?php if (feature_enabled('cart')): ?><a href="<?= url('cart') ?>" class="<?= $mnCur('cart') ?>"><span class="mn-icon"><?= system_ui_icon('cart', 'Cart') ?></span>Cart<?= cart_count() ? ' (' . cart_count() . ')' : '' ?></a><?php endif; ?>
   <a href="<?= url($mnAccount) ?>" class="<?= $mnCur($mnAccount) ?>"><span class="mn-icon"><?= system_ui_icon('user', 'Account') ?></span>Account</a>

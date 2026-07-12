@@ -13,9 +13,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $list = rows("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 100", [$u['id']]);
 $unread = array_filter($list, fn($n) => !$n['read_at']);
-include __DIR__ . '/../views/layout_top.php';
+$isPartial = ($_GET['partial'] ?? '') === 'list';
+if (!$isPartial) include __DIR__ . '/../views/layout_top.php';
 ?>
+<?php if (!$isPartial): ?>
 <div class="container section" style="max-width:760px">
+<?php endif; ?>
+  <div id="notifications-poll"
+       hx-get="<?= url('notifications?partial=list') ?>"
+       hx-trigger="every 15s"
+       hx-swap="outerHTML">
   <div class="section-head">
     <h1>🔔 Notifications<?= $unread ? ' (' . count($unread) . ' new)' : '' ?></h1>
     <?php if ($unread): ?>
@@ -34,8 +41,11 @@ include __DIR__ . '/../views/layout_top.php';
       <div class="panel" style="<?= !$n['read_at'] ? 'border-color:var(--brand)' : '' ?>"><?= $inner ?></div>
     <?php endif; ?>
   <?php endforeach; ?>
+  </div>
+<?php if (!$isPartial): ?>
 </div>
+<?php endif; ?>
 <?php
 // opening the inbox clears the unread badge
 q("UPDATE notifications SET read_at = NOW() WHERE user_id = ? AND read_at IS NULL", [$u['id']]);
-include __DIR__ . '/../views/layout_bottom.php'; ?>
+if (!$isPartial) include __DIR__ . '/../views/layout_bottom.php'; ?>

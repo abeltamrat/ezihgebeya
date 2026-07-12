@@ -2,6 +2,25 @@
 $u = require_vendor();
 $biz = my_business($u);
 $pageTitle = 'Vendor Dashboard';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['do'] ?? '') === 'request_vendor_help') {
+    csrf_check();
+    if (!db_table_exists('support_tickets')) {
+        flash('Support tickets are not installed yet. Run the latest database upgrade first.', 'error');
+    } else {
+        $subject = 'Vendor package guidance request';
+        $message = 'Vendor requested a callback for package guidance, listing growth, promotions, or dashboard help.';
+        if ($biz) $message .= "\n\nBusiness: {$biz['business_name']} (#{$biz['id']})";
+        q("INSERT INTO support_tickets (user_id, category, subject, message, phone, related_type, related_id, priority)
+           VALUES (?,?,?,?,?,?,?,'normal')",
+          [$u['id'], 'callback', $subject, $message, $u['phone'] ?? null, $biz ? 'business' : 'user', $biz ? $biz['id'] : $u['id']]);
+        $ticketId = (int)db()->lastInsertId();
+        foreach (rows("SELECT id FROM users WHERE account_type IN ('admin','super_admin') AND status='active'") as $admin) {
+            notify((int)$admin['id'], 'support_ticket', 'Vendor requested callback #' . $ticketId, 'admin/support');
+        }
+        flash('Callback request sent. Our team can use this ticket to guide you by phone.');
+    }
+    redirect('vendor');
+}
 include __DIR__ . '/../views/layout_top.php';
 ?>
 <div class="container section dash-layout">
@@ -16,9 +35,15 @@ include __DIR__ . '/../views/layout_top.php';
       </div>
     <?php else: ?>
       <?php if ($biz['status'] === 'pending'): ?>
-        <div class="flash flash-info">⏳ Your business "<?= e($biz['business_name']) ?>" is pending admin approval. You can already prepare your listings.</div>
+        <div role="alert" class="alert alert-info mb-4">
+          <?= system_ui_icon('bell', '') ?>
+          <span>⏳ Your business "<strong><?= e($biz['business_name']) ?></strong>" is pending admin approval. You can already prepare your listings.</span>
+        </div>
       <?php elseif ($biz['status'] === 'rejected'): ?>
-        <div class="flash flash-error">Your business registration was rejected. Please update your profile and it will be re-reviewed.</div>
+        <div role="alert" class="alert alert-error mb-4">
+          <span>Your business registration was rejected. Please update your profile and it will be re-reviewed.</span>
+          <a class="btn btn-sm btn-ghost" href="<?= url('vendor/business') ?>">Update profile →</a>
+        </div>
       <?php endif; ?>
       <?php
       $stats = [
@@ -33,9 +58,12 @@ include __DIR__ . '/../views/layout_top.php';
           'Video CTA clicks' => val("SELECT COALESCE(SUM(cta_clicks_count),0) FROM video_posts WHERE business_id = ?", [$biz['id']]),
       ];
       ?>
-      <div class="stat-grid">
+      <div class="stats stats-vertical lg:stats-horizontal shadow w-full border border-base-300 rounded-box mb-4">
         <?php foreach ($stats as $label => $n): ?>
-          <div class="stat-card"><div class="stat-num"><?= (int)$n ?></div><div class="stat-label"><?= $label ?></div></div>
+          <div class="stat">
+            <div class="stat-title text-xs"><?= $label ?></div>
+            <div class="stat-value text-2xl text-primary"><?= (int)$n ?></div>
+          </div>
         <?php endforeach; ?>
       </div>
       <div class="panel">
@@ -45,6 +73,10 @@ include __DIR__ . '/../views/layout_top.php';
           <a class="btn btn-outline" href="<?= url('vendor/listings/service/new') ?>">+ Add service</a>
           <a class="btn btn-outline" href="<?= url('vendor/listings/supply/new') ?>">+ Add supply</a>
           <a class="btn btn-outline" href="<?= url('vendor/videos') ?>">+ Add video link</a>
+          <form method="post" class="form-inline">
+            <?= csrf_field() ?><input type="hidden" name="do" value="request_vendor_help">
+            <button class="btn btn-ghost">Request help / callback</button>
+          </form>
         </div>
       </div>
       <?php $recent = rows("SELECT * FROM inquiries WHERE business_id = ? ORDER BY created_at DESC LIMIT 5", [$biz['id']]); ?>

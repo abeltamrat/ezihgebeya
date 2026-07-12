@@ -79,7 +79,7 @@ include __DIR__ . '/../views/layout_top.php';
       <div class="panel">
         <h3>Request in review <span class="badge badge-status-<?= e($open['status']) ?>"><?= e(str_replace('_',' ',$open['status'])) ?></span></h3>
         <?php if ($open['status'] === 'changes_requested' && $open['admin_note']): ?>
-          <div class="flash flash-error">Admin asked for changes: <?= e($open['admin_note']) ?></div>
+          <div role="alert" class="alert alert-warning mb-3"><span>Admin asked for changes: <?= e($open['admin_note']) ?></span></div>
         <?php endif; ?>
         <p class="muted small">Requested level: <?= e(str_replace('_', ' ', $open['requested_level'])) ?> · sent <?= time_ago($open['created_at']) ?></p>
         <?php if ($open['status'] === 'changes_requested'): ?>

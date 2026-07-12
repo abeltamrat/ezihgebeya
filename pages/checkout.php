@@ -21,34 +21,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors) {
         $orderNums = [];
-        foreach ($groups as $g) {
+        try {
+            db()->beginTransaction();
+            foreach ($groups as $g) {
             $num = order_number();
-            q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method)
-               VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?)",
-              [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
-               $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method]);
+            $trafficSource = 'organic';
+            foreach ($g['items'] as $it) {
+                $itemSource = $_SESSION['cart_source'][$it['type'] . ':' . $it['id']] ?? traffic_source_for_listing($it['type'], (int)$it['id']);
+                if ($itemSource === 'ad') { $trafficSource = 'ad'; break; }
+                if ($itemSource === 'promoted') $trafficSource = 'promoted';
+            }
+            if (db_column_exists('orders', 'traffic_source')) {
+                q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, traffic_source)
+                   VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?)",
+                  [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
+                   $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method, $trafficSource]);
+            } else {
+                q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method)
+                   VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?)",
+                  [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
+                   $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method]);
+            }
             $oid = (int)db()->lastInsertId();
             foreach ($g['items'] as $it) {
                 q("INSERT INTO order_items (order_id, listing_type, listing_id, title, unit_price, quantity, line_total)
                    VALUES (?,?,?,?,?,?,?)", [$oid, $it['type'], $it['id'], $it['title'], $it['price'], $it['qty'], $it['line']]);
             }
+            event_record('order', [
+                'user_id' => $u['id'],
+                'listing_type' => 'order',
+                'listing_id' => $oid,
+                'business_id' => (int)$g['business_id'],
+                'source' => $trafficSource,
+                'city' => $city ?: null,
+                'subcity' => $subcity ?: null,
+                'metadata' => ['order_number' => $num, 'subtotal' => (float)$g['subtotal'], 'items' => array_map(fn($it) => ['type' => $it['type'], 'id' => (int)$it['id'], 'qty' => (float)$it['qty']], $g['items'])],
+            ]);
             $orderNums[] = $num;
             notify_business((int)$g['business_id'], 'order_created',
                 'New order ' . $num . ' — ' . money($g['subtotal']), 'vendor/orders', '', true);
+            }
+            db()->commit();
+            unset($_SESSION['cart']);
+            unset($_SESSION['cart_source']);
+            flash('Order' . (count($orderNums) > 1 ? 's' : '') . ' placed: ' . implode(', ', $orderNums) . '. The seller will confirm availability.' .
+                  ($method !== 'cash_on_delivery' ? ' You can upload your payment proof from My Orders.' : ''));
+            redirect('account/orders');
+        } catch (Throwable $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            $errors[] = 'We could not place your order. Please try again.';
         }
-        unset($_SESSION['cart']);
-        flash('Order' . (count($orderNums) > 1 ? 's' : '') . ' placed: ' . implode(', ', $orderNums) . '. The seller will confirm availability.' .
-              ($method !== 'cash_on_delivery' ? ' You can upload your payment proof from My Orders.' : ''));
-        redirect('account/orders');
     }
 }
 $grand = array_sum(array_column($groups, 'subtotal'));
 include __DIR__ . '/../views/layout_top.php';
 ?>
-<div class="container section detail-layout">
+<div class="container section detail-layout checkout-page">
   <div class="detail-main">
+    <ul class="steps steps-horizontal w-full mb-6 text-sm">
+      <li class="step step-primary">Cart</li>
+      <li class="step step-primary">Delivery &amp; Payment</li>
+      <li class="step">Confirmation</li>
+    </ul>
     <h1>Checkout</h1>
-    <?php foreach ($errors as $er): ?><div class="flash flash-error"><?= e($er) ?></div><?php endforeach; ?>
+    <?php foreach ($errors as $er): ?>
+      <div role="alert" class="alert alert-error mb-3"><span><?= e($er) ?></span></div>
+    <?php endforeach; ?>
     <form class="panel" method="post" id="checkout-form">
       <?= csrf_field() ?>
       <h3>Delivery</h3>
@@ -68,6 +106,16 @@ include __DIR__ . '/../views/layout_top.php';
       <label>Note to seller <textarea name="note" rows="2"></textarea></label>
 
       <h3>Payment</h3>
+      <div class="alert alert-warning safety-tips">
+        <div>
+          <strong>Pay safely</strong>
+          <ul>
+            <li>Confirm item availability and delivery details with the seller.</li>
+            <li>Keep Telebirr/CBE/bank reference numbers and proof screenshots.</li>
+            <li>For high-value orders, inspect before final payment when possible.</li>
+          </ul>
+        </div>
+      </div>
       <?php $first = true; foreach (payment_methods() as $k => $label): ?>
         <label class="check"><input type="radio" name="payment_method" value="<?= $k ?>" <?= $first ? 'checked' : '' ?>>
           <?= $label ?><?= $k === 'cash_on_delivery' ? '' : ' (manual confirmation — upload proof after ordering)' ?></label>
@@ -79,7 +127,7 @@ include __DIR__ . '/../views/layout_top.php';
     </form>
   </div>
   <aside class="detail-side">
-    <div class="panel">
+    <div class="panel checkout-summary-panel">
       <h3>Order summary</h3>
       <?php foreach ($groups as $g): ?>
         <strong>🏪 <?= e($g['business_name']) ?></strong>

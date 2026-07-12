@@ -10,9 +10,11 @@ $titleCol = listing_title_col($ltype);
 $labels = ['product' => 'Products', 'service' => 'Services', 'supply' => 'Supplies'];
 $pageTitle = 'My ' . $labels[$ltype];
 $cats = rows("SELECT * FROM categories WHERE type = ? AND status = 'active' ORDER BY sort_order", [$ltype]);
+$lifecycleEnabled = db_column_exists($table, 'expires_at');
+$rejectionMetaEnabled = db_column_exists($table, 'rejection_reason');
 
 $item = null;
-if (in_array($action, ['edit', 'delete'], true)) {
+if (in_array($action, ['edit', 'delete', 'renew', 'sold', 'available'], true)) {
     $item = row("SELECT * FROM `$table` WHERE id = ? AND business_id = ?", [$lid, $biz['id']]);
     if (!$item) redirect("vendor/listings/$ltype");
 }
@@ -25,6 +27,33 @@ if ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect("vendor/listings/$ltype");
 }
 
+// ----- lifecycle actions -----
+if (in_array($action, ['renew', 'sold', 'available'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    csrf_check();
+    if (!$lifecycleEnabled) {
+        flash('Run database migrations first to enable listing lifecycle tools.', 'error');
+        redirect("vendor/listings/$ltype");
+    }
+
+    if ($action === 'renew') {
+        if (in_array($item['status'], ['expired', 'paused', 'active'], true)) {
+            q("UPDATE `$table` SET status = 'active', expires_at = NOW() + INTERVAL 60 DAY, renewed_at = NOW(), sold_at = NULL WHERE id = ?", [$item['id']]);
+            flash('Listing renewed for 60 days.');
+        }
+    } elseif ($action === 'sold') {
+        if (in_array($item['status'], ['active', 'paused', 'expired'], true)) {
+            q("UPDATE `$table` SET status = 'sold_out', sold_at = NOW() WHERE id = ?", [$item['id']]);
+            flash($ltype === 'service' ? 'Service marked unavailable.' : 'Listing marked as sold.');
+        }
+    } elseif ($action === 'available') {
+        if ($item['status'] === 'sold_out') {
+            q("UPDATE `$table` SET status = 'active', expires_at = NOW() + INTERVAL 60 DAY, renewed_at = NOW(), sold_at = NULL WHERE id = ?", [$item['id']]);
+            flash('Listing is available again for 60 days.');
+        }
+    }
+    redirect("vendor/listings/$ltype");
+}
+
 // ----- plan limit (§26.2) -----
 if ($action === 'new' && !can_add_listing($biz['id'])) {
     flash('Listing limit reached for your ' . plans()[current_plan($biz['id'])]['label'] . ' plan. Upgrade to add more.', 'error');
@@ -33,8 +62,20 @@ if ($action === 'new' && !can_add_listing($biz['id'])) {
 
 // ----- create / update -----
 $errors = [];
+$duplicateListing = null;
 if (in_array($action, ['new', 'edit'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
+    // rate limit new listing creation only — editing an existing listing (price/stock/typo
+    // fixes) is routine vendor activity and shouldn't be throttled the same as someone
+    // scripting mass-listing floods (§22 cross-cutting rate limits: "uploads")
+    if ($action === 'new') {
+        $listingRateMax = (int)sys('limits.listing_rate_max', 10);
+        $listingRateWindow = (int)sys('limits.listing_rate_window_min', 60) * 60;
+        if (rate_limited('listing_create', $listingRateMax, $listingRateWindow)) {
+            flash('Too many listings created recently — please wait before posting more.', 'error');
+            redirect("vendor/listings/$ltype");
+        }
+    }
     $title = trim($_POST['title'] ?? '');
     $catId = (int)($_POST['category_id'] ?? 0);
     $desc = trim($_POST['description'] ?? '');
@@ -46,27 +87,39 @@ if (in_array($action, ['new', 'edit'], true) && $_SERVER['REQUEST_METHOD'] === '
     if (!isset(CITIES[$city])) $errors[] = 'Select a city.';
 
     if (!$errors) {
+        $duplicateListing = find_duplicate_listing($ltype, (int)$biz['id'], $title, $catId, $city, $item['id'] ?? null);
+        if ($duplicateListing) {
+            $errors[] = 'Possible duplicate: you already posted "' . $duplicateListing['title'] . '" in this category/city. Edit it here: ' . url("vendor/listings/$ltype/edit/{$duplicateListing['id']}");
+        }
+    }
+
+    $attrDefs = $catId ? category_attributes($catId) : [];
+    [$attrValues, $attrErrors] = collect_attribute_input($attrDefs, $_POST);
+    $errors = array_merge($errors, $attrErrors);
+
+    if (!$errors) {
         $slug = $item ? $item['slug'] : slugify($title . '-' . $city, $table);
+        $attrJson = encode_attributes($attrValues);
         if ($ltype === 'product') {
             $data = [$catId, $title, $desc, $_POST['product_type'] ?? 'ready_made', $_POST['condition_type'] ?? 'new',
                 (float)($_POST['price'] ?? 0) ?: null, (float)($_POST['discount_price'] ?? 0) ?: null,
                 isset($_POST['is_negotiable']) ? 1 : 0, (int)($_POST['stock_quantity'] ?? 0),
                 trim($_POST['material'] ?? ''), trim($_POST['brand'] ?? ''), trim($_POST['color'] ?? ''),
-                trim($_POST['dimensions'] ?? ''), trim($_POST['warranty'] ?? ''),
+                trim($_POST['dimensions'] ?? ''), trim($_POST['warranty'] ?? ''), $attrJson,
                 isset($_POST['delivery_available']) ? 1 : 0, isset($_POST['installation_available']) ? 1 : 0,
                 isset($_POST['customization_available']) ? 1 : 0, $city, $subcity];
-            $cols = "category_id=?, title=?, description=?, product_type=?, condition_type=?, price=?, discount_price=?, is_negotiable=?, stock_quantity=?, material=?, brand=?, color=?, dimensions=?, warranty=?, delivery_available=?, installation_available=?, customization_available=?, city=?, subcity=?";
+            $cols = "category_id=?, title=?, description=?, product_type=?, condition_type=?, price=?, discount_price=?, is_negotiable=?, stock_quantity=?, material=?, brand=?, color=?, dimensions=?, warranty=?, attributes=?, delivery_available=?, installation_available=?, customization_available=?, city=?, subcity=?";
         } elseif ($ltype === 'service') {
             $data = [$catId, $title, $desc, (int)($_POST['experience_years'] ?? 0),
-                $_POST['price_type'] ?? 'quote_required', (float)($_POST['starting_price'] ?? 0) ?: null, $city, $subcity];
-            $cols = "category_id=?, title=?, description=?, experience_years=?, price_type=?, starting_price=?, city=?, subcity=?";
+                $_POST['price_type'] ?? 'quote_required', (float)($_POST['starting_price'] ?? 0) ?: null, $attrJson, $city, $subcity];
+            $cols = "category_id=?, title=?, description=?, experience_years=?, price_type=?, starting_price=?, attributes=?, city=?, subcity=?";
         } else {
             $data = [$catId, $title, $desc, trim($_POST['brand'] ?? ''), trim($_POST['grade'] ?? ''),
                 trim($_POST['size'] ?? ''), trim($_POST['thickness'] ?? ''), $_POST['unit_of_measurement'] ?? 'piece',
                 (float)($_POST['price_per_unit'] ?? 0) ?: null, (float)($_POST['bulk_price'] ?? 0) ?: null,
-                (float)($_POST['minimum_order_quantity'] ?? 1) ?: 1, (float)($_POST['stock_quantity'] ?? 0),
+                (float)($_POST['minimum_order_quantity'] ?? 1) ?: 1, (float)($_POST['stock_quantity'] ?? 0), $attrJson,
                 isset($_POST['delivery_available']) ? 1 : 0, $city, $subcity];
-            $cols = "category_id=?, name=?, description=?, brand=?, grade=?, size=?, thickness=?, unit_of_measurement=?, price_per_unit=?, bulk_price=?, minimum_order_quantity=?, stock_quantity=?, delivery_available=?, city=?, subcity=?";
+            $cols = "category_id=?, name=?, description=?, brand=?, grade=?, size=?, thickness=?, unit_of_measurement=?, price_per_unit=?, bulk_price=?, minimum_order_quantity=?, stock_quantity=?, attributes=?, delivery_available=?, city=?, subcity=?";
         }
 
         $newStatus = sys('moderation.auto_approve_listings') ? 'active' : 'pending_review'; // §16.3 policy switch
@@ -78,6 +131,13 @@ if (in_array($action, ['new', 'edit'], true) && $_SERVER['REQUEST_METHOD'] === '
             q("INSERT INTO `$table` SET business_id = " . (int)$biz['id'] . ", slug = " . db()->quote($slug) . ", $cols, status = " . db()->quote($newStatus), $data);
             $newId = (int)db()->lastInsertId();
             flash($newStatus === 'active' ? 'Listing created and live!' : 'Listing created! It will be public after admin approval.');
+        }
+
+        if ($lifecycleEnabled && in_array($newStatus, ['active', 'pending_review'], true)) {
+            q("UPDATE `$table` SET expires_at = IF(expires_at IS NULL OR expires_at < NOW(), NOW() + INTERVAL 60 DAY, expires_at) WHERE id = ?", [$newId]);
+        }
+        if ($rejectionMetaEnabled && $newStatus === 'pending_review') {
+            q("UPDATE `$table` SET rejection_reason = NULL, rejection_note = NULL WHERE id = ?", [$newId]);
         }
 
         // images (max per listing set in admin → Settings → Limits)
@@ -127,18 +187,48 @@ include __DIR__ . '/../views/layout_top.php';
     <?php if (!$list): ?><div class="empty-state">No <?= strtolower($labels[$ltype]) ?> yet.</div>
     <?php else: ?>
     <div class="table-wrap"><table class="data-table">
-      <tr><th>Title</th><th>Category</th><th>Price</th><th>Status</th><th>Views</th><th>Inquiries</th><th></th></tr>
+      <tr><th>Title</th><th>Category</th><th>Price</th><th>Status</th><?php if ($lifecycleEnabled): ?><th>Lifecycle</th><?php endif; ?><th>Views</th><th>Inquiries</th><th></th></tr>
       <?php foreach ($list as $l): ?>
       <tr>
-        <td><?= e($l[$titleCol]) ?></td>
+        <td><?= e($l[$titleCol]) ?>
+          <?php if ($rejectionMetaEnabled && $l['status'] === 'rejected'): ?>
+            <div class="rejection-note">
+              <strong>Fix needed: <?= e(str_replace('_', ' ', $l['rejection_reason'] ?: 'other')) ?></strong>
+              <span><?= e($l['rejection_note'] ?: listing_rejection_instruction($l['rejection_reason'] ?? 'other')) ?></span>
+            </div>
+          <?php endif; ?>
+        </td>
         <td><?= e($l['c_name']) ?></td>
         <td><?= money($l['price'] ?? $l['starting_price'] ?? $l['price_per_unit'] ?? null) ?: '—' ?></td>
         <td><span class="badge badge-status-<?= e($l['status']) ?>"><?= e(str_replace('_', ' ', $l['status'])) ?></span></td>
+        <?php if ($lifecycleEnabled): ?>
+        <td class="small">
+          <?php if (!empty($l['sold_at'])): ?>
+            Sold <?= date('M j', strtotime($l['sold_at'])) ?>
+          <?php elseif (!empty($l['expires_at'])): ?>
+            <?= strtotime($l['expires_at']) < time() ? 'Expired' : 'Expires' ?> <?= date('M j', strtotime($l['expires_at'])) ?>
+          <?php else: ?>
+            —
+          <?php endif; ?>
+        </td>
+        <?php endif; ?>
         <td><?= (int)$l['views_count'] ?></td>
         <td><?= (int)$l['inquiries_count'] ?></td>
         <td class="row-actions">
           <?php if ($l['status'] === 'active'): ?><a href="<?= listing_url($ltype, $l) ?>" title="View">👁</a><?php endif; ?>
           <a href="<?= url("vendor/listings/$ltype/edit/{$l['id']}") ?>" title="Edit">✏️</a>
+          <?php if ($lifecycleEnabled && in_array($l['status'], ['active', 'paused', 'expired'], true)): ?>
+          <form method="post" action="<?= url("vendor/listings/$ltype/renew/{$l['id']}") ?>">
+            <?= csrf_field() ?><button title="Renew for 60 days">↻</button>
+          </form>
+          <form method="post" action="<?= url("vendor/listings/$ltype/sold/{$l['id']}") ?>" onsubmit="return confirm('Mark this listing as <?= $ltype === 'service' ? 'unavailable' : 'sold' ?>?')">
+            <?= csrf_field() ?><button title="<?= $ltype === 'service' ? 'Mark unavailable' : 'Mark sold' ?>">✓</button>
+          </form>
+          <?php elseif ($lifecycleEnabled && $l['status'] === 'sold_out'): ?>
+          <form method="post" action="<?= url("vendor/listings/$ltype/available/{$l['id']}") ?>">
+            <?= csrf_field() ?><button title="Make available again">↻</button>
+          </form>
+          <?php endif; ?>
           <form method="post" action="<?= url("vendor/listings/$ltype/delete/{$l['id']}") ?>" onsubmit="return confirm('Delete this listing?')">
             <?= csrf_field() ?><button title="Delete">🗑</button>
           </form>
@@ -148,17 +238,27 @@ include __DIR__ . '/../views/layout_top.php';
     </table></div>
     <?php endif; ?>
 
-  <?php else: $v = fn($k, $d = '') => e($_POST[$k] ?? $item[$k] ?? $d); ?>
+    <?php else: $v = fn($k, $d = '') => e($_POST[$k] ?? $item[$k] ?? $d); ?>
     <h1><?= $item ? 'Edit' : 'New' ?> <?= rtrim($labels[$ltype], 's') ?></h1>
-    <?php foreach ($errors as $er): ?><div class="flash flash-error"><?= e($er) ?></div><?php endforeach; ?>
-    <form class="panel form-2col" method="post" enctype="multipart/form-data">
+    <div class="bilingual-hint">
+      <strong>Amharic and English are welcome.</strong>
+      <span>Use the words buyers search for, e.g. “ወንበር / chair”, “አልጋ / bed”, materials, size, condition, and delivery area.</span>
+    </div>
+    <p id="listing-required-hint" class="muted small">Fields marked with * are required. Images should be clear, truthful, and owned by your business.</p>
+    <?php if ($errors): ?><div id="listing-error-summary" role="alert" class="alert alert-error mb-3"><strong>Please fix these issues:</strong><ul class="list-disc list-inside text-sm"><?php foreach ($errors as $er): ?><li><?= e($er) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
+    <?php if (!empty($duplicateListing)): ?>
+      <div role="alert" class="alert alert-warning mb-3">
+        <span>This looks like an existing listing: <strong><?= e($duplicateListing['title']) ?></strong>. <a class="link font-bold" href="<?= url("vendor/listings/$ltype/edit/{$duplicateListing['id']}") ?>">Edit that listing instead</a>.</span>
+      </div>
+    <?php endif; ?>
+    <form class="panel form-2col listing-form" method="post" enctype="multipart/form-data" aria-describedby="listing-required-hint<?= $errors ? ' listing-error-summary' : '' ?>">
       <?= csrf_field() ?>
-      <label class="span2">Title * <input name="title" required value="<?= $item ? e($item[$titleCol]) : e($_POST['title'] ?? '') ?>"></label>
+      <label class="span2">Title * <input name="title" required lang="am" value="<?= $item ? e($item[$titleCol]) : e($_POST['title'] ?? '') ?>" placeholder="e.g. የእንጨት ወንበር / Wooden chair"></label>
       <label>Category *
-        <select name="category_id" required>
+        <select name="category_id" id="category-select" required>
           <option value="">Select…</option>
           <?php foreach ($cats as $c): ?>
-            <option value="<?= $c['id'] ?>" <?= (int)($_POST['category_id'] ?? $item['category_id'] ?? 0) === (int)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
+            <option value="<?= $c['id'] ?>" <?= (int)($_POST['category_id'] ?? $item['category_id'] ?? $_GET['category_id'] ?? 0) === (int)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
           <?php endforeach; ?>
         </select>
       </label>
@@ -175,6 +275,38 @@ include __DIR__ . '/../views/layout_top.php';
           <?php foreach (CITIES[$selCity] ?? [] as $s): ?><option <?= ($item['subcity'] ?? '') === $s ? 'selected' : '' ?>><?= e($s) ?></option><?php endforeach; ?>
         </select>
       </label>
+
+      <?php
+      // Dynamic per-category attributes (admin-managed under Admin → Categories → Attributes).
+      // One fieldset per category is rendered server-side; JS shows only the one matching the
+      // selected category — same "no page reload" pattern as the city/subcity fields above.
+      $currentAttrValues = $_POST['attr'] ?? ($item ? decode_attributes($item['attributes'] ?? null) : []);
+      foreach ($cats as $c):
+          $catAttrs = category_attributes((int)$c['id']);
+          if (!$catAttrs) continue;
+      ?>
+      <div class="attr-fieldset span2 form-2col" data-category="<?= $c['id'] ?>" style="display:none">
+        <?php foreach ($catAttrs as $a): $val = $currentAttrValues[$a['key_name']] ?? null; ?>
+          <?php if ($a['input_type'] === 'boolean'): ?>
+            <label class="check"><input type="checkbox" name="attr[<?= e($a['key_name']) ?>]" <?= $val ? 'checked' : '' ?>> <?= e($a['label']) ?></label>
+          <?php elseif ($a['input_type'] === 'select'): ?>
+            <label><?= e($a['label']) ?><?= $a['is_required'] ? ' *' : '' ?>
+              <select name="attr[<?= e($a['key_name']) ?>]" <?= $a['is_required'] ? 'required' : '' ?>>
+                <option value="">Select…</option>
+                <?php foreach (json_decode($a['options'] ?? '[]', true) ?: [] as $opt): ?>
+                  <option <?= (string)$val === $opt ? 'selected' : '' ?>><?= e($opt) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </label>
+          <?php else: ?>
+            <label><?= e($a['label']) ?><?= $a['unit'] ? ' (' . e($a['unit']) . ')' : '' ?><?= $a['is_required'] ? ' *' : '' ?>
+              <input type="<?= $a['input_type'] === 'number' ? 'number' : 'text' ?>" <?= $a['input_type'] === 'number' ? 'step="any"' : '' ?>
+                name="attr[<?= e($a['key_name']) ?>]" value="<?= e((string)($val ?? '')) ?>" <?= $a['is_required'] ? 'required' : '' ?>>
+            </label>
+          <?php endif; ?>
+        <?php endforeach; ?>
+      </div>
+      <?php endforeach; ?>
 
       <?php if ($ltype === 'product'): ?>
         <label>Type
@@ -201,11 +333,14 @@ include __DIR__ . '/../views/layout_top.php';
           <label class="check"><input type="checkbox" name="installation_available" <?= !empty($_POST['installation_available'] ?? $item['installation_available'] ?? 0) ? 'checked' : '' ?>> Installation</label>
           <label class="check"><input type="checkbox" name="customization_available" <?= !empty($_POST['customization_available'] ?? $item['customization_available'] ?? 0) ? 'checked' : '' ?>> Customization</label>
         </div>
-        <label class="span2">Images (up to <?= (int)sys('limits.max_images_per_listing', 6) ?>) <input type="file" name="images[]" accept="image/*" multiple></label>
+        <label class="span2">Images (up to <?= (int)sys('limits.max_images_per_listing', 6) ?>)
+          <input type="file" name="images[]" accept="image/*" multiple aria-describedby="listing-images-hint">
+          <span id="listing-images-hint" class="muted small">Upload JPG/PNG/WebP photos. The first image becomes the main listing photo.</span>
+        </label>
         <?php if (feature_enabled('ar') && current_plan($biz['id']) === 'premium'): ?>
-          <label>AR model — .glb (Android/web) <input type="file" name="model_glb" accept=".glb"></label>
-          <label>AR model — .usdz (iOS) <input type="file" name="model_usdz" accept=".usdz"></label>
-          <p class="muted small span2">Only <strong>.glb</strong> and <strong>.usdz</strong> are supported — plain <strong>.obj</strong> files won't preview in AR.
+          <label>AR model — .glb (Android/web) <input type="file" name="model_glb" accept=".glb" aria-describedby="ar-model-hint"></label>
+          <label>AR model — .usdz (iOS) <input type="file" name="model_usdz" accept=".usdz" aria-describedby="ar-model-hint"></label>
+          <p id="ar-model-hint" class="muted small span2">Only <strong>.glb</strong> and <strong>.usdz</strong> are supported — plain <strong>.obj</strong> files won't preview in AR.
             If your model is an .obj, convert it first: try this free
             <a href="https://products.aspose.app/3d/conversion/obj-to-glb" target="_blank" rel="noopener">OBJ → GLB converter ↗</a>
             (upload your .obj + .mtl, download the .glb), or in Blender (free): <em>File → Import → Wavefront (.obj)</em>, then <em>File → Export → glTF 2.0 (.glb)</em>.</p>
@@ -221,7 +356,7 @@ include __DIR__ . '/../views/layout_top.php';
           </select>
         </label>
         <label>Starting price (ETB) <input type="number" step="0.01" name="starting_price" value="<?= $v('starting_price') ?>"></label>
-        <label>Cover image <input type="file" name="image" accept="image/*"></label>
+        <label>Cover image <input type="file" name="image" accept="image/*" aria-describedby="service-image-hint"><span id="service-image-hint" class="muted small">Use a clear project or portfolio image.</span></label>
 
       <?php else: ?>
         <label>Brand <input name="brand" value="<?= $v('brand') ?>"></label>
@@ -238,15 +373,29 @@ include __DIR__ . '/../views/layout_top.php';
         <label>Min. order qty <input type="number" step="0.01" name="minimum_order_quantity" value="<?= $v('minimum_order_quantity', 1) ?>"></label>
         <label>Stock quantity <input type="number" step="0.01" name="stock_quantity" value="<?= $v('stock_quantity', 0) ?>"></label>
         <div class="span2"><label class="check"><input type="checkbox" name="delivery_available" <?= !empty($_POST['delivery_available'] ?? $item['delivery_available'] ?? 0) ? 'checked' : '' ?>> Delivery available</label></div>
-        <label>Image <input type="file" name="image" accept="image/*"></label>
+        <label>Image <input type="file" name="image" accept="image/*" aria-describedby="supply-image-hint"><span id="supply-image-hint" class="muted small">Use a clear photo of the material or supply.</span></label>
       <?php endif; ?>
 
-      <label class="span2">Description <textarea name="description" rows="5"><?= $v('description') ?></textarea></label>
+      <label class="span2">Description <textarea name="description" rows="5" lang="am" placeholder="Write in Amharic, English, or both. Mention condition, size, material, delivery, and location."><?= $v('description') ?></textarea></label>
       <div class="span2">
         <button class="btn btn-primary"><?= $item ? 'Save changes' : 'Create listing' ?></button>
         <a class="btn btn-ghost" href="<?= url("vendor/listings/$ltype") ?>">Cancel</a>
       </div>
     </form>
+    <script>
+      (function () {
+        var catSel = document.getElementById('category-select');
+        var fieldsets = document.querySelectorAll('.attr-fieldset');
+        if (!catSel || !fieldsets.length) return;
+        var sync = function () {
+          fieldsets.forEach(function (fs) {
+            fs.style.display = fs.dataset.category === catSel.value ? '' : 'none';
+          });
+        };
+        catSel.addEventListener('change', sync);
+        sync();
+      })();
+    </script>
   <?php endif; ?>
   </div>
 </div>

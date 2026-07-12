@@ -1,5 +1,7 @@
 <?php
-if (auth()) redirect('');
+$existingUser = auth();
+$returnTo = safe_return_path($_POST['return_to'] ?? $_GET['return'] ?? ($_SESSION['return_to'] ?? ''), '');
+if ($existingUser) redirect(safe_return_path($returnTo, default_post_login_path($existingUser)));
 $pageTitle = 'Create account';
 $errors = [];
 $accountTypes = [
@@ -45,9 +47,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('Welcome to ' . site_name() . '!');
         if ($otpRequired) {
             otp_send($phone, 'verify_phone'); // §5.1.4 — confirm the number by SMS
-            redirect('verify');
+            if ($returnTo !== '') $_SESSION['return_to'] = $returnTo;
+            redirect('verify' . ($returnTo !== '' ? '?return=' . rawurlencode($returnTo) : ''));
         }
-        redirect(in_array($type, VENDOR_TYPES, true) ? 'vendor/business' : '');
+        $default = in_array($type, VENDOR_TYPES, true) ? 'vendor/business' : 'account';
+        unset($_SESSION['return_to']);
+        redirect(safe_return_path($returnTo, $default));
     }
 }
 include __DIR__ . '/../views/layout_top.php';
@@ -55,8 +60,15 @@ include __DIR__ . '/../views/layout_top.php';
 <div class="container section auth-page">
   <form class="panel auth-panel" method="post">
     <?= csrf_field() ?>
+    <input type="hidden" name="return_to" value="<?= e($returnTo) ?>">
     <h1>Create your account</h1>
-    <?php foreach ($errors as $er): ?><div class="flash flash-error"><?= e($er) ?></div><?php endforeach; ?>
+    <?php if ($errors): ?>
+      <div role="alert" class="alert alert-error mb-4">
+        <ul class="list-disc list-inside text-sm space-y-0.5">
+          <?php foreach ($errors as $er): ?><li><?= e($er) ?></li><?php endforeach; ?>
+        </ul>
+      </div>
+    <?php endif; ?>
     <label>I am a…</label>
     <div class="type-grid">
       <?php foreach ($accountTypes as $k => [$label, $desc]): ?>
@@ -71,7 +83,7 @@ include __DIR__ . '/../views/layout_top.php';
     <label>Email (optional) <input type="email" name="email" value="<?= e($_POST['email'] ?? '') ?>"></label>
     <label>Password <input type="password" name="password" required minlength="<?= (int)sys('auth.min_password_len', 6) ?>"></label>
     <button class="btn btn-primary btn-block">Create account</button>
-    <p class="muted">Already have an account? <a href="<?= url('login') ?>">Log in</a></p>
+    <p class="muted">Already have an account? <a href="<?= url('login' . ($returnTo !== '' ? '?return=' . rawurlencode($returnTo) : '')) ?>">Log in</a></p>
   </form>
 </div>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>

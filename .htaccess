@@ -1,5 +1,11 @@
 RewriteEngine On
 
+# Force HTTPS in production. Localhost/dev requests are left alone so XAMPP and
+# local Apache smoke tests do not get trapped in a redirect loop.
+RewriteCond %{HTTPS} !=on
+RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1)(:\d+)?$ [NC]
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
 # pass the Authorization header through to PHP (needed for /api bearer tokens)
 RewriteCond %{HTTP:Authorization} .
 RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
@@ -7,7 +13,40 @@ RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 # block PHP execution in uploads
 RewriteRule ^uploads/.*\.(php|phtml|php\d)$ - [F]
 
-# serve existing files/dirs directly (assets, uploads, manifest, sw)
+# Block direct web access to backend internals and deploy/runtime data. Public
+# traffic should enter through index.php, /api, /app, /assets, or /uploads.
+RewriteRule ^app/.*\.(?:php|inc|md|json|lock|log|sql)$ - [F]
+RewriteRule ^(?:database|storage|vendor|frontend|node_modules|tests?)(?:/|$) - [F]
+RewriteRule ^(?:config\.php|composer\.(?:json|lock)|package(?:-lock)?\.json|vite\.config\.[^/]+|tsconfig[^/]*\.json|tailwind\.config\.[^/]+)$ - [F]
+RewriteRule ^(?:\.env(?:\..*)?|.*\.(?:log|sql|bak|old|orig|dist|ini|phar))$ - [F]
+
+# cache static assets and public media; keep PWA control files fresh
+<IfModule mod_headers.c>
+RewriteRule ^assets/.*\.(css|js)$ - [E=EZIH_CODE_ASSET:1]
+RewriteRule ^assets/.*\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$ - [E=EZIH_LONG_ASSET:1]
+RewriteRule ^app/assets/.*\.(css|js)$ - [E=EZIH_CODE_ASSET:1]
+RewriteRule ^app/assets/.*\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$ - [E=EZIH_LONG_ASSET:1]
+RewriteRule ^uploads/.*\.(png|jpe?g|gif|webp|svg|mp4|webm|glb|usdz)$ - [E=EZIH_PUBLIC_MEDIA:1]
+RewriteRule ^(sw\.js|manifest(?:\.json|\.webmanifest)|app/index\.html)$ - [E=EZIH_NO_CACHE:1]
+
+Header set Cache-Control "public, max-age=3600" env=EZIH_CODE_ASSET
+Header set Cache-Control "public, max-age=2592000" env=EZIH_LONG_ASSET
+Header set Cache-Control "public, max-age=2592000" env=EZIH_PUBLIC_MEDIA
+Header set Cache-Control "no-cache, no-store, must-revalidate" env=EZIH_NO_CACHE
+Header set Pragma "no-cache" env=EZIH_NO_CACHE
+Header set Expires "0" env=EZIH_NO_CACHE
+Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" "expr=%{HTTPS} == 'on'"
+</IfModule>
+
+# Route authenticated React app paths to the static Vite shell. Real files under
+# /app/assets are served directly by the existing-file rule above.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^app(?:/.*)?$ app/index.html [L]
+
+# API traffic is handled by the PHP front controller, never by the SPA fallback.
+RewriteRule ^api(?:/.*)?$ index.php [L]
+
+# serve existing files/dirs directly (assets, uploads, manifest, sw, Vite files)
 RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
 RewriteRule ^ - [L]

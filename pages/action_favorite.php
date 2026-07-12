@@ -12,6 +12,15 @@ if ($pid && val("SELECT COUNT(*) FROM products WHERE id = ? AND status = 'active
     } else {
         q("INSERT INTO favorites (user_id, product_id) VALUES (?,?)", [$u['id'], $pid]);
         q("UPDATE products SET favorites_count = favorites_count + 1 WHERE id = ?", [$pid]);
+        $p = row("SELECT business_id, category_id FROM products WHERE id = ?", [$pid]);
+        event_record('favorite', [
+            'user_id' => $u['id'],
+            'listing_type' => 'product',
+            'listing_id' => $pid,
+            'business_id' => $p['business_id'] ?? null,
+            'category_id' => $p['category_id'] ?? null,
+            'source' => traffic_source_for_listing('product', $pid),
+        ]);
         flash('Saved! Find it under My Account.');
     }
 }

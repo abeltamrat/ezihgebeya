@@ -51,7 +51,7 @@ include __DIR__ . '/../views/layout_top.php';
          · Verification: <?= verified_badge($biz['verification_status']) ?: '<span class="badge badge-muted">unverified</span>' ?>
          <?php if ($biz['status'] === 'active'): ?> · <a href="<?= url('businesses/' . e($biz['slug'])) ?>">View public page →</a><?php endif; ?></p>
     <?php endif; ?>
-    <?php foreach ($errors as $er): ?><div class="flash flash-error"><?= e($er) ?></div><?php endforeach; ?>
+    <?php if ($errors): ?><div role="alert" class="alert alert-error mb-3"><ul class="list-disc list-inside text-sm"><?php foreach ($errors as $er): ?><li><?= e($er) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
     <form class="panel form-2col" method="post" enctype="multipart/form-data">
       <?= csrf_field() ?>
       <label>Business name * <input name="business_name" required value="<?= e($_POST['business_name'] ?? $biz['business_name'] ?? '') ?>"></label>

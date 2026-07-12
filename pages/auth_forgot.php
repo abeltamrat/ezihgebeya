@@ -48,7 +48,7 @@ include __DIR__ . '/../views/layout_top.php';
 <div class="container section auth-page">
   <div class="panel auth-panel">
     <h1>Reset password</h1>
-    <?php if ($error): ?><div class="flash flash-error"><?= e($error) ?></div><?php endif; ?>
+    <?php if ($error): ?><div role="alert" class="alert alert-error mb-3"><span><?= e($error) ?></span></div><?php endif; ?>
     <?php if ($step === 1): ?>
       <p class="muted">Enter the phone number you registered with and we'll SMS you a reset code.</p>
       <form method="post">

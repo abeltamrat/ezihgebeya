@@ -57,7 +57,7 @@ include __DIR__ . '/../views/layout_top.php';
   <div class="dash-main">
     <h1>My Videos</h1>
     <p class="muted">Paste TikTok or YouTube links — no upload needed. Link each video to a listing so viewers can buy directly.</p>
-    <?php foreach ($errors as $er): ?><div class="flash flash-error"><?= e($er) ?></div><?php endforeach; ?>
+    <?php if ($errors): ?><div role="alert" class="alert alert-error mb-3"><ul class="list-disc list-inside text-sm"><?php foreach ($errors as $er): ?><li><?= e($er) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
 
     <form class="panel form-2col" method="post">
       <?= csrf_field() ?>

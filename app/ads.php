@@ -52,6 +52,13 @@ function ad_track_impression(array $ad, string $placement): void {
     q("UPDATE ads SET impressions_count = impressions_count + 1, spent = spent + ? WHERE id = ?", [$spend, $ad['id']]);
     q("INSERT INTO ad_events (ad_id, event_type, placement, city, session_id, ip) VALUES (?, 'impression', ?, ?, ?, ?)",
       [$ad['id'], $placement, user_location()['city'], session_id(), $_SERVER['REMOTE_ADDR'] ?? null]);
+    event_record('ad_impression', [
+        'listing_type' => 'ad',
+        'listing_id' => (int)$ad['id'],
+        'source' => 'ad',
+        'city' => user_location()['city'],
+        'metadata' => ['placement' => $placement, 'advertiser' => $ad['advertiser_name'] ?? null],
+    ]);
     if ($ad['budget'] > 0 && $ad['spent'] + $spend >= $ad['budget']) {
         q("UPDATE ads SET status = 'completed' WHERE id = ? AND budget > 0 AND spent >= budget", [$ad['id']]);
     }

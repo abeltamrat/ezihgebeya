@@ -5,6 +5,13 @@ if (!$v) redirect('videos');
 q("UPDATE video_posts SET cta_clicks_count = cta_clicks_count + 1 WHERE id = ?", [$id]);
 q("INSERT INTO video_events (video_post_id, user_id, session_id, event_type, ip_address, user_agent) VALUES (?,?,?, 'cta_click', ?, ?)",
   [$id, auth()['id'] ?? null, session_id(), $_SERVER['REMOTE_ADDR'] ?? null, mb_substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255)]);
+event_record('video_cta_click', [
+    'listing_type' => 'video',
+    'listing_id' => $id,
+    'business_id' => $v['business_id'] ?? null,
+    'source' => 'video_feed',
+    'metadata' => ['linked_type' => $v['linked_type'], 'linked_id' => $v['linked_id']],
+]);
 
 $dest = null;
 if ($v['linked_id']) {

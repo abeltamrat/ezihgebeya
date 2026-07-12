@@ -1,11 +1,30 @@
 <?php
-session_start();
 require __DIR__ . '/config.php';
+
+// Secure session cookie (§ cross-cutting security checklist): HttpOnly always, Secure
+// whenever the request actually arrived over HTTPS — including behind a reverse proxy
+// that terminates TLS and forwards plain HTTP internally, which is common on shared
+// hosting. Must run before session_start(), and needs BASE_URL from config.php first.
+$isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => (BASE_URL !== '' ? BASE_URL : '') . '/',
+    'domain' => '',
+    'secure' => $isHttps,
+    'httponly' => true,
+    'samesite' => 'Lax',
+]);
+session_start();
 require __DIR__ . '/app/db.php';
+require __DIR__ . '/app/cache.php';
 require __DIR__ . '/app/helpers.php';
 require __DIR__ . '/app/settings.php';
 require __DIR__ . '/app/notify.php';
 require __DIR__ . '/app/ads.php';
+require __DIR__ . '/app/attributes.php';
+require __DIR__ . '/app/search_synonyms.php';
+require __DIR__ . '/app/saved_searches.php';
 
 // idle session timeout (§22.1.5, minutes configurable in admin → Settings)
 if (!empty($_SESSION['user_id'])) {
@@ -81,6 +100,9 @@ match (true) {
     $path === 'cart'     => require $P . 'cart.php',
     $path === 'checkout' => require $P . 'checkout.php',
     $path === 'account/orders' => require $P . 'account_orders.php',
+    $path === 'account/settings' => require $P . 'account_settings.php',
+    $path === 'account/saved-searches' => require $P . 'account_saved_searches.php',
+    $path === 'support' => require $P . 'support.php',
 
     // auth
     $path === 'login'    => require $P . 'auth_login.php',
@@ -88,6 +110,7 @@ match (true) {
     $path === 'logout'   => require $P . 'auth_logout.php',
     $path === 'verify'   => require $P . 'auth_verify.php',
     $path === 'forgot-password' => require $P . 'auth_forgot.php',
+    $path === 'appeal'   => require $P . 'sanction_appeal.php',
     $path === 'account'  => require $P . 'account.php',
 
     // inquiry threads + notifications + search + content pages
@@ -95,12 +118,16 @@ match (true) {
     $path === 'notifications' => require $P . 'notifications.php',
     $path === 'search'        => require $P . 'search.php',
     $seg[0] === 'page' && count($seg) === 2 => call($P, 'page.php', ['slug' => $seg[1]]),
-    in_array($path, ['about', 'contact', 'terms', 'privacy'], true) => call($P, 'page.php', ['slug' => $path]),
+    in_array($path, ['about', 'contact', 'terms', 'privacy', 'prohibited-items'], true) => call($P, 'page.php', ['slug' => $path]),
 
     // video engagement events (POST from feed JS)
     $path === 'videos/event' => require $P . 'video_event.php',
 
-    // REST API (§18)
+    // session-cookie API for the React SPA — must be matched before the generic
+    // /api arm below, since match(true) stops at the first true condition
+    $seg[0] === 'api' && ($seg[1] ?? '') === 'v1' => call($P, 'api_v1.php', ['apiSeg' => array_slice($seg, 2)]),
+
+    // bearer-token REST API (§18) for non-browser clients
     $seg[0] === 'api' => call($P, 'api.php', ['apiSeg' => array_slice($seg, 1)]),
 
     // form actions (POST)
@@ -108,6 +135,7 @@ match (true) {
     $path === 'review'   => require $P . 'action_review.php',
     $path === 'report'   => require $P . 'action_report.php',
     $path === 'favorite' => require $P . 'action_favorite.php',
+    $path === 'saved-search' => require $P . 'action_saved_search.php',
 
     // vendor dashboard
     $path === 'vendor'                => require $P . 'vendor_dashboard.php',
@@ -123,7 +151,11 @@ match (true) {
     $path === 'vendor/analytics'      => require $P . 'vendor_analytics.php',
 
     // utilities
-    $path === 'sitemap.xml' => require $P . 'sitemap.php',
+    $path === 'manifest.webmanifest' => require $P . 'manifest.php',
+    $path === 'offline' => require $P . 'offline.php',
+    $path === 'web-vitals' => require $P . 'web_vitals.php',
+    $path === 'sitemap.xml' => call($P, 'sitemap.php', ['sitemapKind' => 'index']),
+    preg_match('~^sitemap-(static|products|services|supplies|businesses)\.xml$~', $path, $m) === 1 => call($P, 'sitemap.php', ['sitemapKind' => $m[1]]),
     $seg[0] === 'cron'      => call($P, 'cron.php', ['job' => $seg[1] ?? 'daily']),
 
     // admin

@@ -6,6 +6,31 @@
  * full flow is testable locally (the OTP code is also flashed in DEV_MODE).
  */
 
+/** Tail the outbox log for recent failure lines (sms-error/email-error/webhook-error/
+ * cron-error), grouped by channel. Bounded read (last ~256KB) so a large log file never
+ * makes an admin page load slowly. */
+function recent_delivery_failures(int $days = 7): array {
+    $path = __DIR__ . '/../database/outbox.log';
+    if (!is_file($path)) return [];
+    $size = filesize($path);
+    $chunk = 262144;
+    $fh = fopen($path, 'r');
+    if (!$fh) return [];
+    fseek($fh, max(0, $size - $chunk));
+    $tail = stream_get_contents($fh);
+    fclose($fh);
+    $since = time() - $days * 86400;
+    $counts = [];
+    foreach (explode("\n", $tail) as $line) {
+        if (!preg_match('/^\[([^\]]+)\]\s+([\w-]+)\s+→/', $line, $m)) continue;
+        if (!str_ends_with($m[2], '-error')) continue;
+        $ts = strtotime($m[1]);
+        if ($ts !== false && $ts < $since) continue;
+        $counts[$m[2]] = ($counts[$m[2]] ?? 0) + 1;
+    }
+    return $counts;
+}
+
 // ---------- outbound channels ----------
 function outbox_log(string $channel, string $to, string $message): void {
     $line = '[' . date('c') . "] $channel → $to: " . str_replace(["\r", "\n"], ' ', $message) . "\n";
@@ -20,14 +45,8 @@ function send_sms(string $phone, string $message): void {
     if ($gateway === '' || DEV_MODE) return;
     $url = str_replace(['{phone}', '{message}'], [rawurlencode($phone), rawurlencode($message)], $gateway);
     try {
-        if (function_exists('curl_init')) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 5]);
-            curl_exec($ch);
-            curl_close($ch);
-        } elseif (ini_get('allow_url_fopen')) {
-            @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 5]]));
-        }
+        $host = parse_url($gateway, PHP_URL_HOST);
+        if ($host) remote_text($url, [$host], 5);
     } catch (Throwable $e) {
         outbox_log('sms-error', $phone, $e->getMessage());
     }
@@ -37,20 +56,138 @@ function send_sms(string $phone, string $message): void {
 function send_email(string $to, string $subject, string $body): void {
     outbox_log('email', $to, "$subject — $body");
     if (!DEV_MODE && function_exists('mail')) {
-        @mail($to, $subject, $body, 'From: ' . site_name() . ' <' . sys('notifications.email_from', 'no-reply@ezihgebeya.local') . '>');
+        $sent = @mail($to, $subject, $body, 'From: ' . site_name() . ' <' . sys('notifications.email_from', 'no-reply@ezihgebeya.local') . '>');
+        if (!$sent) outbox_log('email-error', $to, 'mail() returned false — check server mail configuration');
+    }
+}
+
+/** POST a JSON payload to a webhook URL, using the same HTTPS-only/SSRF-blocking guard
+ * (remote_url_allowed() in app/helpers.php) as every other server-side fetch in this app.
+ * No caller yet (payment-gateway integration is future Revenue-model work) — this is the
+ * convention that work should use, so failure logging comes for free instead of being
+ * bolted on later. Pass $allowedHosts once a real gateway host is known; empty means
+ * "any host that passes the private-IP/HTTPS checks", which is fine for now since nothing
+ * calls this yet. */
+function webhook_post(string $url, array $payload, array $allowedHosts = [], int $timeoutSec = 5): bool {
+    if (!remote_url_allowed($url, $allowedHosts)) {
+        outbox_log('webhook-error', $url, 'blocked: not an approved HTTPS host');
+        return false;
+    }
+    try {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $timeoutSec,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+        ]);
+        curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($err || $code >= 400) { outbox_log('webhook-error', $url, $err ?: "HTTP $code"); return false; }
+        return true;
+    } catch (Throwable $e) {
+        outbox_log('webhook-error', $url, $e->getMessage());
+        return false;
     }
 }
 
 // ---------- in-app notifications ----------
+function notification_is_marketing(string $type): bool {
+    $type = strtolower(str_replace('-', '_', trim($type)));
+    if (substr($type, 0, 10) === 'marketing_') return true;
+    return in_array($type, ['promo', 'promotion', 'campaign', 'newsletter', 'vendor_digest'], true);
+}
+
+function user_marketing_opted_in(?int $userId, string $channel): bool {
+    if (!$userId) return false;
+    $cols = [
+        'sms' => 'marketing_sms_opt_in',
+        'email' => 'marketing_email_opt_in',
+        'push' => 'marketing_push_opt_in',
+        'in_app' => 'marketing_push_opt_in',
+    ];
+    $col = $cols[$channel] ?? null;
+    if (!$col) return false;
+
+    // Before the migration is applied, keep existing notification behavior rather
+    // than breaking transactional flows on a missing preference column.
+    if (!function_exists('db_column_exists') || !db_column_exists('users', $col)) return true;
+    return (int)val("SELECT `$col` FROM users WHERE id = ?", [$userId]) === 1;
+}
+
+function notification_categories(): array {
+    return [
+        'inquiries' => 'Inquiries and chat replies',
+        'orders' => 'Orders and delivery updates',
+        'reviews' => 'Reviews and ratings',
+        'promotions' => 'Promotion/subscription reminders',
+        'support' => 'Support ticket updates',
+    ];
+}
+
+function notification_category_for_type(string $type): ?string {
+    $type = strtolower(str_replace('-', '_', trim($type)));
+    if (str_contains($type, 'inquiry') || $type === 'vendor_reply') return 'inquiries';
+    if (str_starts_with($type, 'order_') || str_contains($type, 'delivery')) return 'orders';
+    if (str_contains($type, 'review')) return 'reviews';
+    if (str_contains($type, 'promotion') || str_contains($type, 'subscription')) return 'promotions';
+    if (str_starts_with($type, 'support_') || $type === 'support_ticket') return 'support';
+    return null;
+}
+
+function notification_category_is_mandatory(string $type): bool {
+    $type = strtolower(str_replace('-', '_', trim($type)));
+    return str_starts_with($type, 'account_')
+        || str_starts_with($type, 'sanction_')
+        || str_starts_with($type, 'payment_')
+        || str_starts_with($type, 'verification_')
+        || str_starts_with($type, 'listing_')
+        || in_array($type, ['password_reset', 'otp', 'security'], true);
+}
+
+function user_notification_enabled(?int $userId, string $type): bool {
+    if (!$userId || notification_category_is_mandatory($type)) return true;
+    $category = notification_category_for_type($type);
+    if (!$category || !db_table_exists('user_notification_preferences')) return true;
+    $enabled = val("SELECT enabled FROM user_notification_preferences WHERE user_id = ? AND category = ?", [$userId, $category]);
+    return $enabled === null ? true : (bool)$enabled;
+}
+
+function send_marketing_sms_to_user(int $userId, string $message): bool {
+    if (!user_marketing_opted_in($userId, 'sms')) return false;
+    $phone = val("SELECT phone FROM users WHERE id = ?", [$userId]);
+    if (!$phone) return false;
+    send_sms($phone, $message);
+    return true;
+}
+
+function send_marketing_email_to_user(int $userId, string $subject, string $body): bool {
+    if (!user_marketing_opted_in($userId, 'email')) return false;
+    $email = val("SELECT email FROM users WHERE id = ?", [$userId]);
+    if (!$email) return false;
+    send_email($email, $subject, $body);
+    return true;
+}
+
 /** Create an in-app notification (and mirror to SMS/email for high-value events). */
 function notify(?int $userId, string $type, string $title, string $url = '', string $body = '', bool $alsoSms = false): void {
     if (!$userId) return;
     try {
-        q("INSERT INTO notifications (user_id, type, title, body, url) VALUES (?,?,?,?,?)",
-          [$userId, $type, mb_substr($title, 0, 220), $body ?: null, $url ?: null]);
+        if (!user_notification_enabled($userId, $type)) return;
+        $isMarketing = notification_is_marketing($type);
+        if (!$isMarketing || user_marketing_opted_in($userId, 'push')) {
+            q("INSERT INTO notifications (user_id, type, title, body, url) VALUES (?,?,?,?,?)",
+              [$userId, $type, mb_substr($title, 0, 220), $body ?: null, $url ?: null]);
+        }
         if ($alsoSms && sys('notifications.sms_mirror', 1)) {
-            $phone = val("SELECT phone FROM users WHERE id = ?", [$userId]);
-            if ($phone) send_sms($phone, site_name() . ': ' . $title);
+            if (!$isMarketing || user_marketing_opted_in($userId, 'sms')) {
+                $phone = val("SELECT phone FROM users WHERE id = ?", [$userId]);
+                if ($phone) send_sms($phone, site_name() . ': ' . $title);
+            }
         }
     } catch (Throwable $e) {
         // notifications must never break the main action
@@ -122,4 +259,44 @@ function audit(string $action, string $targetType = '', $targetId = null, string
     } catch (Throwable $e) {
         // never block the admin action
     }
+}
+
+/** Hours from submission to first moderation decision, one value per moderated item, across
+ * every entity type the admin queues cover. Computed in PHP rather than SQL MEDIAN() (not
+ * available on MySQL 5.7 / most MariaDB versions) — matches the plan's "stay portable across
+ * MySQL 5.7+ and MariaDB" rule already applied to the attribute-filter JSON queries. */
+function moderation_turnaround_hours(int $days = 30): array {
+    $since = "NOW() - INTERVAL $days DAY";
+    $specs = [
+        // [audit action, target_type value stored by admin.php's action dispatcher, submission table, submission id col]
+        ['listing_status', 'product', 'products', 'id'],
+        ['listing_status', 'service', 'services', 'id'],
+        ['listing_status', 'supply', 'supplies', 'id'],
+        ['biz_status', 'businesses', 'businesses', 'id'],
+        ['video_status', 'videos', 'video_posts', 'id'],
+        ['review_status', 'reviews', 'reviews', 'id'],
+        ['vr_review', 'verification', 'verification_requests', 'id'],
+    ];
+    $hours = [];
+    foreach ($specs as [$action, $targetType, $table, $idCol]) {
+        $rowsList = rows(
+            "SELECT TIMESTAMPDIFF(HOUR, s.created_at, first_decision.decided_at) hrs
+             FROM (
+                 SELECT target_id, MIN(created_at) decided_at FROM audit_logs
+                 WHERE action = ? AND target_type = ? AND target_id IS NOT NULL AND created_at > $since
+                 GROUP BY target_id
+             ) first_decision
+             JOIN `$table` s ON s.`$idCol` = first_decision.target_id",
+            [$action, $targetType]
+        );
+        foreach ($rowsList as $r) if ($r['hrs'] !== null) $hours[] = (float)$r['hrs'];
+    }
+    return $hours;
+}
+
+function median(array $nums): ?float {
+    if (!$nums) return null;
+    sort($nums);
+    $mid = (int)floor((count($nums) - 1) / 2);
+    return count($nums) % 2 ? $nums[$mid] : ($nums[$mid] + $nums[$mid + 1]) / 2;
 }

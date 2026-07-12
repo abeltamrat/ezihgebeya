@@ -13,12 +13,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $t = LISTING_TABLES[$type];
             if (val("SELECT COUNT(*) FROM `$t` WHERE id = ? AND status = 'active'", [$id])) {
                 cart_add($type, $id, max(1, $qty));
+                $postedSource = $_POST['traffic_source'] ?? '';
+                $src = in_array($postedSource, ['organic', 'promoted', 'video_feed', 'ad'], true) ? $postedSource : traffic_source_for_listing($type, $id);
+                $_SESSION['cart_source'][$type . ':' . $id] = $src;
+                event_record('cart_add', [
+                    'listing_type' => $type,
+                    'listing_id' => $id,
+                    'source' => $src,
+                    'metadata' => ['qty' => max(1, $qty)],
+                ]);
                 flash('Added to cart.');
             }
         } elseif ($do === 'update') {
             cart_set($type, $id, $qty);
         } elseif ($do === 'remove') {
             cart_set($type, $id, 0);
+            unset($_SESSION['cart_source'][$type . ':' . $id]);
             flash('Removed from cart.');
         }
     }
@@ -33,13 +43,14 @@ $groups = cart_resolve();
 $grand = array_sum(array_column($groups, 'subtotal'));
 include __DIR__ . '/../views/layout_top.php';
 ?>
-<div class="container section">
+<div class="container section cart-page">
   <h1>🛒 My Cart</h1>
+  <?php if ($groups): ?><p class="muted cart-summary-line"><?= count($groups) ?> shop<?= count($groups) === 1 ? '' : 's' ?> in this cart</p><?php endif; ?>
   <?php if (!$groups): ?>
     <div class="empty-state">Your cart is empty. Browse <a href="<?= url('products') ?>">furniture</a> or <a href="<?= url('supplies') ?>">supplies</a>.</div>
   <?php else: ?>
     <?php foreach ($groups as $g): ?>
-    <div class="panel">
+    <div class="panel cart-shop-panel">
       <h3>🏪 <?= e($g['business_name']) ?></h3>
       <div class="table-wrap"><table class="data-table">
         <tr><th>Item</th><th>Unit price</th><th>Qty</th><th>Total</th><th></th></tr>

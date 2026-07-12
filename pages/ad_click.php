@@ -13,9 +13,18 @@ if ($billable && $ad['status'] === 'active') {
     q("UPDATE ads SET clicks_count = clicks_count + 1, spent = spent + ? WHERE id = ?", [$spend, $ad['id']]);
     q("INSERT INTO ad_events (ad_id, event_type, placement, city, session_id, ip) VALUES (?, 'click', ?, ?, ?, ?)",
       [$ad['id'], $ad['placement'], user_location()['city'], session_id(), $_SERVER['REMOTE_ADDR'] ?? null]);
+    event_record('ad_click', [
+        'listing_type' => 'ad',
+        'listing_id' => (int)$ad['id'],
+        'source' => 'ad',
+        'city' => user_location()['city'],
+        'metadata' => ['placement' => $ad['placement'], 'destination_url' => $ad['destination_url']],
+    ]);
     if ($ad['budget'] > 0) q("UPDATE ads SET status = 'completed' WHERE id = ? AND spent >= budget", [$ad['id']]);
 }
 
 $dest = trim($ad['destination_url']);
 if (preg_match('~^https?://~i', $dest)) { header('Location: ' . $dest); exit; }
-redirect(ltrim($dest, '/')); // internal path like /products/some-slug
+$internal = ltrim($dest, '/'); // internal path like /products/some-slug
+$internal .= (str_contains($internal, '?') ? '&' : '?') . 'src=ad';
+redirect($internal);

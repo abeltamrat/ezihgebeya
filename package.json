@@ -1,0 +1,27 @@
+{
+  "name": "ezihgebeya",
+  "version": "1.0.0",
+  "description": "MVP built from *Development Documentation v1.0* (see the PDF in this folder). Plain PHP 8 MVC + MySQL — runs on XAMPP now, deploys to any shared host later.",
+  "main": "sw.js",
+  "scripts": {
+    "css:build": "tailwindcss -i assets/css/tailwind.css -o assets/css/app.css --minify",
+    "css:watch": "tailwindcss -i assets/css/tailwind.css -o assets/css/app.css --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abeltamrat/ezihgebeya.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/abeltamrat/ezihgebeya/issues"
+  },
+  "homepage": "https://github.com/abeltamrat/ezihgebeya#readme",
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.2",
+    "daisyui": "^5.6.14",
+    "tailwindcss": "^4.3.2"
+  }
+}

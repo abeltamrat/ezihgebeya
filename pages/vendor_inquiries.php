@@ -19,11 +19,18 @@ $filter = $_GET['status'] ?? '';
 $where = "business_id = ?"; $params = [$biz['id']];
 if ($filter) { $where .= " AND status = ?"; $params[] = $filter; }
 $inqs = rows("SELECT * FROM inquiries WHERE $where ORDER BY created_at DESC LIMIT 200", $params);
-include __DIR__ . '/../views/layout_top.php';
+$isPartial = ($_GET['partial'] ?? '') === 'list';
+if (!$isPartial) include __DIR__ . '/../views/layout_top.php';
 ?>
+<?php if (!$isPartial): ?>
 <div class="container section dash-layout">
   <?php include __DIR__ . '/../views/vendor_nav.php'; ?>
   <div class="dash-main">
+<?php endif; ?>
+    <div id="vendor-inquiries-poll"
+         hx-get="<?= url('vendor/inquiries?partial=list' . ($filter !== '' ? '&status=' . rawurlencode($filter) : '')) ?>"
+         hx-trigger="every 15s"
+         hx-swap="outerHTML">
     <div class="section-head">
       <h1>Inquiries (<?= count($inqs) ?>)</h1>
       <form method="get">
@@ -63,6 +70,9 @@ include __DIR__ . '/../views/layout_top.php';
       </div>
     </div>
     <?php endforeach; ?>
+    </div>
+<?php if (!$isPartial): ?>
   </div>
 </div>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>
+<?php endif; ?>

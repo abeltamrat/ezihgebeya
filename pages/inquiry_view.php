@@ -33,8 +33,10 @@ q("UPDATE inquiry_messages SET read_at = NOW() WHERE inquiry_id = ? AND sender_i
 
 $msgs = rows("SELECT m.*, u.full_name FROM inquiry_messages m JOIN users u ON u.id = m.sender_id
               WHERE m.inquiry_id = ? ORDER BY m.created_at", [$inq['id']]);
-include __DIR__ . '/../views/layout_top.php';
+$isPartial = ($_GET['partial'] ?? '') === 'messages';
+if (!$isPartial) include __DIR__ . '/../views/layout_top.php';
 ?>
+<?php if (!$isPartial): ?>
 <div class="container section" style="max-width:760px">
   <p><a href="<?= url($isOwner ? 'vendor/inquiries' : 'account') ?>">← Back</a></p>
   <h1>💬 <?= e($inq['listing_title'] ?: ucfirst($inq['listing_type']) . ' inquiry') ?></h1>
@@ -47,13 +49,21 @@ include __DIR__ . '/../views/layout_top.php';
     <?php if ($isOwner): ?><p class="muted small">📞 <?= e($inq['phone']) ?> · prefers <?= e($inq['preferred_contact_method']) ?></p><?php endif; ?>
   </div>
 
+<?php endif; ?>
+
+  <div id="inquiry-messages-poll"
+       hx-get="<?= url('inquiries/' . $inq['id'] . '?partial=messages') ?>"
+       hx-trigger="every 10s"
+       hx-swap="outerHTML">
   <?php foreach ($msgs as $m): $mine = (int)$m['sender_id'] === (int)$u['id']; ?>
     <div class="panel" style="<?= $mine ? 'margin-left:14%;background:var(--brand-soft)' : 'margin-right:14%' ?>">
       <div class="review-head"><strong><?= $mine ? 'You' : e($m['full_name']) ?></strong><span class="muted"><?= time_ago($m['created_at']) ?></span></div>
       <p><?= nl2br(e($m['body'])) ?></p>
     </div>
   <?php endforeach; ?>
+  </div>
 
+<?php if (!$isPartial): ?>
   <?php if ($inq['customer_id'] || $isOwner): ?>
     <?php if (!$inq['customer_id']): ?>
       <p class="muted small">This inquiry was sent by a guest — your reply is stored here, but reach them at <?= e($inq['phone']) ?> to make sure they see it.</p>
@@ -66,3 +76,4 @@ include __DIR__ . '/../views/layout_top.php';
   <?php endif; ?>
 </div>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>
+<?php endif; ?>

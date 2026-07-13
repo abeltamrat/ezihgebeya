@@ -22,6 +22,34 @@ export interface VendorDashboard {
   }>;
 }
 
+export interface VendorBusiness {
+  id: number;
+  business_name: string;
+  slug: string;
+  business_type: string;
+  description: string | null;
+  phone: string;
+  city: string;
+  subcity: string | null;
+  area_name: string | null;
+  address: string | null;
+  tin_number: string | null;
+  license_number: string | null;
+  logo_url: string | null;
+  cover_image_url: string | null;
+  verification_status: string;
+  status: string;
+  public_url: string | null;
+}
+
+export interface VendorBusinessState {
+  ok: true;
+  business: VendorBusiness | null;
+  cities: string[];
+  subcities: Record<string, string[]>;
+  default_phone: string | null;
+}
+
 export type ListingType = 'product' | 'service' | 'supply';
 
 export interface AttributeDef {
@@ -90,8 +118,182 @@ export interface Listing {
   images: Array<{ id: number; url: string; is_primary: boolean }>;
 }
 
+export interface VendorInquiry {
+  id: number;
+  customer_id: number | null;
+  listing_type: 'product' | 'service' | 'supply' | 'business' | 'video';
+  listing_id: number | null;
+  listing_title: string | null;
+  inquiry_type: string;
+  name: string | null;
+  message: string | null;
+  phone: string | null;
+  preferred_contact_method: string;
+  source: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface VendorInquiryMessage {
+  id: number;
+  sender_id: number;
+  sender_name: string;
+  body: string;
+  read_at: string | null;
+  created_at: string;
+  mine: boolean;
+}
+
+export interface VendorOrder {
+  id: number;
+  order_number: string;
+  customer: string;
+  customer_id: number;
+  status: string;
+  delivery_option: string;
+  delivery_address: string | null;
+  city: string | null;
+  subcity: string | null;
+  phone: string | null;
+  note: string | null;
+  subtotal: string | number;
+  delivery_fee: string | number;
+  total: string | number;
+  total_formatted: string;
+  payment_method: string;
+  created_at: string;
+  items: Array<{
+    id: number;
+    listing_type: string;
+    listing_id: number;
+    title: string;
+    unit_price: string | number;
+    quantity: string | number;
+    line_total: string | number;
+    line_total_formatted: string;
+  }>;
+  payments: Array<{
+    id: number;
+    payer_id: number;
+    amount: string | number;
+    amount_formatted: string;
+    currency: string;
+    payment_method: string;
+    reference_number: string | null;
+    proof_url: string | null;
+    status: string;
+    created_at: string;
+  }>;
+}
+
+export interface VendorVideo {
+  id: number;
+  platform: 'tiktok' | 'youtube';
+  original_url: string;
+  video_id: string | null;
+  embed_url: string | null;
+  title: string | null;
+  linked_type: 'product' | 'service' | 'supply' | 'business';
+  linked_id: number | null;
+  cta_label: string;
+  status: string;
+  views_count: number;
+  cta_clicks_count: number;
+  created_at: string;
+}
+
+export interface VendorVideoMeta {
+  ok: true;
+  cta_labels: string[];
+  can_add_video: boolean;
+  plan: string;
+  owned_listings: Record<'product' | 'service' | 'supply', Array<{ id: number; title: string }>>;
+}
+
+export interface VerificationRequest {
+  id: number;
+  requested_level: string;
+  status: string;
+  message: string | null;
+  admin_note: string | null;
+  created_at: string;
+  updated_at: string;
+  documents: Array<{ id: number; doc_type: string; label: string; url: string | null; created_at: string }>;
+}
+
+export interface VerificationState {
+  ok: true;
+  current_level: string;
+  doc_types: Array<{ key: string; label: string }>;
+  levels: Array<{ key: string; label: string }>;
+  open: VerificationRequest | null;
+  history: VerificationRequest[];
+}
+
+export interface VendorReview {
+  id: number;
+  reviewer_id: number;
+  reviewer_name: string;
+  listing_type: string;
+  listing_id: number | null;
+  rating: number;
+  title: string | null;
+  comment: string | null;
+  is_verified_purchase: boolean;
+  status: string;
+  vendor_reply: string | null;
+  vendor_replied_at: string | null;
+  created_at: string;
+}
+
+export interface VendorAnalytics {
+  ok: true;
+  // Tier-gated (PLAN.md "Gate the full dashboard behind Boost tiers"): 'basic' (free — totals/funnel
+  // only), 'standard' (Boost Basic — adds money + top lists), 'full' (Boost Pro/Max — everything).
+  analytics_level: 'basic' | 'standard' | 'full';
+  upgrade_url: string;
+  totals: Array<{ label: string; value: number | null; formatted?: string; suffix?: string }>;
+  funnel: Array<{ label: string; count: number; dropoff_percent: number | null }>;
+  money: {
+    order_revenue_30d_formatted: string;
+    average_order_value_30d_formatted: string;
+    promotion_spend_30d_formatted: string;
+    promoted_inquiries_30d: number;
+    promoted_orders_30d: number;
+  } | null;
+  listings: Array<{
+    listing_type: string;
+    id: number;
+    title: string;
+    status: string;
+    views30: number;
+    views7: number;
+    favorites30: number;
+    inquiries30: number;
+    inquiries7: number;
+    orders30: number;
+    revenue30_formatted: string;
+  }>;
+  top_products: Array<{ title: string; views: number; inquiries: number; favorites: number }>;
+  lead_sources: Array<{ source: string; count: number }>;
+  lead_statuses: Array<{ status: string; count: number }>;
+  revenue_by_listing: Array<{ listing_type: string; listing_id: number; title: string; orders_count: number; revenue_formatted: string }>;
+  reviews: {
+    average_rating: number | null;
+    average_rating_30d: number | null;
+    reviews_30d: number;
+    median_response_minutes: number | null;
+    median_response_label: string | null;
+  } | null;
+  top_videos: Array<{ id: number; title: string; views: number; cta_clicks: number; ctr_percent: number | null }>;
+}
+
 export const vendorApi = {
   dashboard: () => api.get<VendorDashboard>('/vendor/dashboard'),
+  business: () => api.get<VendorBusinessState>('/vendor/business'),
+  saveBusiness: (form: FormData) => api.post<{ ok: true; business: VendorBusiness }>('/vendor/business', form),
   meta: (type: ListingType) => api.get<ListingMeta>(`/vendor/listings/${type}/meta`),
   list: (type: ListingType) => api.get<{ ok: true; data: Listing[] }>(`/vendor/listings/${type}`),
   get: (type: ListingType, id: number) => api.get<{ ok: true; data: Listing }>(`/vendor/listings/${type}/${id}`),
@@ -105,4 +307,36 @@ export const vendorApi = {
     Array.from(files).forEach((f) => form.append('images[]', f));
     return api.post<{ ok: true; uploaded: number }>(`/vendor/listings/${type}/${id}/images`, form);
   },
+  setPrimaryImage: (id: number, imageId: number) =>
+    api.post<{ ok: true }>(`/vendor/listings/product/${id}/images/${imageId}/primary`),
+  deleteImage: (type: ListingType, id: number, imageId?: number) =>
+    api.del<{ ok: true }>(`/vendor/listings/${type}/${id}/images${imageId ? `/${imageId}` : ''}`),
+  inquiries: (status = '') =>
+    api.get<{ ok: true; data: VendorInquiry[]; statuses: string[] }>(
+      `/vendor/inquiries${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+    ),
+  inquiry: (id: number) =>
+    api.get<{ ok: true; data: VendorInquiry; messages: VendorInquiryMessage[] }>(`/vendor/inquiries/${id}`),
+  updateInquiryStatus: (id: number, status: string) =>
+    api.post<{ ok: true }>(`/vendor/inquiries/${id}/status`, { status }),
+  replyToInquiry: (id: number, body: string) =>
+    api.post<{ ok: true }>(`/vendor/inquiries/${id}/messages`, { body }),
+  orders: () => api.get<{ ok: true; data: VendorOrder[]; statuses: string[] }>('/vendor/orders'),
+  updateOrderStatus: (id: number, status: string) =>
+    api.post<{ ok: true }>(`/vendor/orders/${id}/status`, { status }),
+  confirmOrderPayment: (orderId: number, paymentId: number) =>
+    api.post<{ ok: true }>(`/vendor/orders/${orderId}/payments/${paymentId}/confirm`),
+  videoMeta: () => api.get<VendorVideoMeta>('/vendor/videos/meta'),
+  videos: () => api.get<{ ok: true; data: VendorVideo[] }>('/vendor/videos'),
+  createVideo: (body: Record<string, unknown>) =>
+    api.post<{ ok: true; data: VendorVideo }>('/vendor/videos', body),
+  deleteVideo: (id: number) => api.del<{ ok: true }>(`/vendor/videos/${id}`),
+  verification: () => api.get<VerificationState>('/vendor/verification'),
+  submitVerification: (form: FormData) =>
+    api.post<{ ok: true; data: VerificationRequest }>('/vendor/verification', form),
+  reviews: () =>
+    api.get<{ ok: true; rating_average: number; rating_count: number; data: VendorReview[] }>('/vendor/reviews'),
+  replyToReview: (id: number, reply: string) =>
+    api.post<{ ok: true }>(`/vendor/reviews/${id}/reply`, { reply }),
+  analytics: () => api.get<VendorAnalytics>('/vendor/analytics'),
 };

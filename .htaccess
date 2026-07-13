@@ -16,7 +16,7 @@ RewriteRule ^uploads/.*\.(php|phtml|php\d)$ - [F]
 # Block direct web access to backend internals and deploy/runtime data. Public
 # traffic should enter through index.php, /api, /app, /assets, or /uploads.
 RewriteRule ^app/.*\.(?:php|inc|md|json|lock|log|sql)$ - [F]
-RewriteRule ^(?:database|storage|vendor|frontend|node_modules|tests?)(?:/|$) - [F]
+RewriteRule ^(?:database|storage|protected_uploads|vendor|frontend|node_modules|tests?)(?:/|$) - [F]
 RewriteRule ^(?:config\.php|composer\.(?:json|lock)|package(?:-lock)?\.json|vite\.config\.[^/]+|tsconfig[^/]*\.json|tailwind\.config\.[^/]+)$ - [F]
 RewriteRule ^(?:\.env(?:\..*)?|.*\.(?:log|sql|bak|old|orig|dist|ini|phar))$ - [F]
 
@@ -36,10 +36,23 @@ Header set Cache-Control "no-cache, no-store, must-revalidate" env=EZIH_NO_CACHE
 Header set Pragma "no-cache" env=EZIH_NO_CACHE
 Header set Expires "0" env=EZIH_NO_CACHE
 Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" "expr=%{HTTPS} == 'on'"
+
+# Baseline security headers applied to every response. nosniff stops MIME
+# confusion; DENY blocks clickjacking (the app is never framed); Referrer-Policy
+# avoids leaking full URLs (with query strings) to third parties; Permissions-Policy
+# turns off device APIs the marketplace never uses.
+Header always set X-Content-Type-Options "nosniff"
+Header always set X-Frame-Options "DENY"
+Header always set Referrer-Policy "strict-origin-when-cross-origin"
+# geolocation=self: location auto-detect (assets/js/app.js). xr-spatial-tracking=self:
+# WebXR "view in your room" AR on the product page. camera/microphone/payment off — unused.
+Header always set Permissions-Policy "geolocation=(self), xr-spatial-tracking=(self), camera=(), microphone=(), payment=()"
 </IfModule>
 
 # Route authenticated React app paths to the static Vite shell. Real files under
 # /app/assets are served directly by the existing-file rule above.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^app/assets/ - [R=404,L]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^app(?:/.*)?$ app/index.html [L]
 

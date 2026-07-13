@@ -58,19 +58,12 @@ $log[] = "ad campaigns completed: $n";
 $expiredSubs = rows("SELECT * FROM subscriptions WHERE status = 'active' AND ends_at IS NOT NULL AND ends_at < NOW()");
 foreach ($expiredSubs as $s) {
     q("UPDATE subscriptions SET status = 'expired' WHERE id = ?", [$s['id']]);
-    if ($s['plan'] !== 'premium') continue;
-    // Undo the premium_verified badge payment_confirm granted on activation — but only if the
-    // business didn't separately earn it through a real, approved verification request; that's
-    // independent of the subscription and shouldn't be revoked just because the plan lapsed.
-    $biz = row("SELECT verification_status FROM businesses WHERE id = ?", [$s['business_id']]);
-    if (!$biz || $biz['verification_status'] !== 'premium_verified') continue;
-    $earnedIndependently = val("SELECT COUNT(*) FROM verification_requests
-        WHERE business_id = ? AND status = 'approved' AND requested_level = 'premium_verified'", [$s['business_id']]);
-    if ($earnedIndependently) continue;
-    $fallback = val("SELECT requested_level FROM verification_requests
-        WHERE business_id = ? AND status = 'approved' ORDER BY FIELD(requested_level, 'location_verified','document_verified') DESC, id DESC LIMIT 1",
-        [$s['business_id']]) ?: 'unverified';
-    q("UPDATE businesses SET verification_status = ? WHERE id = ?", [$fallback, $s['business_id']]);
+    // Undo the premium_verified badge activation granted, unless the business still has premium
+    // backing (another active plan or an independently-approved premium verification). Shared with
+    // activate_subscription()'s downgrade path so both routes revert identically.
+    if (($s['plan'] ?? '') === 'premium' && ($s['type'] ?? 'listing_plan') === 'listing_plan') {
+        revert_premium_badge_if_unbacked((int)$s['business_id']);
+    }
 }
 $log[] = 'subscriptions expired: ' . count($expiredSubs);
 
@@ -93,6 +86,9 @@ $log[] = "subscription expiry warnings sent: $warned";
 q("DELETE FROM otp_codes WHERE created_at < NOW() - INTERVAL 2 DAY");
 q("DELETE FROM login_attempts WHERE created_at < NOW() - INTERVAL 7 DAY");
 q("DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at < NOW() - INTERVAL 90 DAY");
+if (db_table_exists('remembered_login_tokens')) {
+    q("DELETE FROM remembered_login_tokens WHERE expires_at <= NOW()");
+}
 $log[] = 'auth/notification tables pruned';
 
 // 2d. event summaries + raw event retention. Rebuild a short rolling window so late
@@ -171,6 +167,44 @@ foreach (LISTING_TABLES as $type => $t) {
 // 5. auto-close stale inquiries (new > 60 days)
 $n = q("UPDATE inquiries SET status = 'closed' WHERE status = 'new' AND created_at < NOW() - INTERVAL 60 DAY")->rowCount();
 $log[] = "stale inquiries closed: $n";
+
+// 5b. precompute the admin Trust panel's suspicious-activity trend (moves these 5 queries
+// off every admin_more.php page load) and alert admins when any category's flag count rises
+// versus the previous run, rather than admins only finding out on their next page visit.
+if (db_table_exists('admin_suspicious_flags')) {
+    $flags = [
+        'underpriced_flags' => (int)val("SELECT COUNT(*) FROM products p
+            JOIN (SELECT category_id, AVG(price) avg_price FROM products WHERE status='active' AND price > 0 GROUP BY category_id HAVING COUNT(*) >= 3) avg_t
+              ON avg_t.category_id = p.category_id
+            WHERE p.status = 'active' AND p.price > 0 AND p.price < avg_t.avg_price * 0.1"),
+        'listing_flood_flags' => (int)val("SELECT COUNT(*) FROM (
+            SELECT b.id FROM businesses b JOIN products p ON p.business_id = b.id
+            WHERE b.created_at > NOW() - INTERVAL 7 DAY GROUP BY b.id HAVING COUNT(p.id) > 10
+        ) t"),
+        'report_cluster_flags' => (int)val("SELECT COUNT(*) FROM (
+            SELECT reported_type, reported_id FROM reports WHERE status IN ('open','reviewing')
+            GROUP BY reported_type, reported_id HAVING COUNT(*) >= 3
+        ) t"),
+        'duplicate_title_flags' => (int)val("SELECT COUNT(*) FROM (
+            SELECT title FROM products WHERE status='active' GROUP BY title HAVING COUNT(*) >= 4
+        ) t"),
+        'ad_click_fraud_flags' => (int)val("SELECT COUNT(*) FROM (
+            SELECT ad_id, ip FROM ad_events WHERE event_type='click' AND created_at > NOW() - INTERVAL 1 DAY
+            GROUP BY ad_id, ip HAVING COUNT(*) >= 5
+        ) t"),
+    ];
+    $previous = row("SELECT * FROM admin_suspicious_flags ORDER BY id DESC LIMIT 1");
+    $labels = ['underpriced_flags' => 'under-priced listings', 'listing_flood_flags' => 'new-seller listing floods',
+        'report_cluster_flags' => 'report clusters', 'duplicate_title_flags' => 'duplicate-title listings', 'ad_click_fraud_flags' => 'ad-click fraud clusters'];
+    $risen = [];
+    foreach ($flags as $key => $count) {
+        if ($previous && $count > (int)$previous[$key]) $risen[] = $labels[$key] . ' (' . (int)$previous[$key] . ' → ' . $count . ')';
+    }
+    q("INSERT INTO admin_suspicious_flags (underpriced_flags, listing_flood_flags, report_cluster_flags, duplicate_title_flags, ad_click_fraud_flags)
+       VALUES (?,?,?,?,?)", array_values($flags));
+    if ($risen) notify_admins('suspicious_activity_flag', 'New suspicious-activity trend: ' . implode(', ', $risen), 'admin/analytics');
+    $log[] = 'suspicious-activity flags: ' . array_sum($flags) . ($risen ? ' (' . count($risen) . ' category(ies) rose, admins notified)' : '');
+}
 
 // 6. daily summary
 $log[] = 'summary: users=' . val("SELECT COUNT(*) FROM users")

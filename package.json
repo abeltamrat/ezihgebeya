@@ -5,7 +5,8 @@
   "main": "sw.js",
   "scripts": {
     "css:build": "tailwindcss -i assets/css/tailwind.css -o assets/css/app.css --minify",
-    "css:watch": "tailwindcss -i assets/css/tailwind.css -o assets/css/app.css --watch"
+    "css:watch": "tailwindcss -i assets/css/tailwind.css -o assets/css/app.css --watch",
+    "spa:sync": "node tools/sync_spa.mjs"
   },
   "repository": {
     "type": "git",

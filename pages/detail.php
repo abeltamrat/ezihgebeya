@@ -94,10 +94,11 @@ $isFav = $u && $type === 'product' && val("SELECT COUNT(*) FROM favorites WHERE 
 
 $inquiryType = ['product' => 'product_inquiry', 'service' => 'service_quote_request', 'supply' => 'supply_order_request'][$type];
 $postLikePath = is_vendor($u) ? "app/vendor/listings/$type/new?category_id=" . (int)$item['category_id'] : ($u ? 'account' : 'register');
+$boostRank = boost_rank_sql('b.id');
 $similar = rows("SELECT l.*, b.business_name b_name, b.verification_status b_verification, c.name c_name, c.icon c_icon
     FROM `$table` l JOIN businesses b ON b.id = l.business_id JOIN categories c ON c.id = l.category_id
     WHERE l.status = 'active' AND b.status = 'active' AND l.category_id = ? AND l.id != ?
-    ORDER BY l.is_featured DESC, l.is_promoted DESC, (l.city <=> ?) DESC, l.created_at DESC LIMIT 8",
+    ORDER BY $boostRank DESC, l.is_featured DESC, l.is_promoted DESC, (l.city <=> ?) DESC, l.created_at DESC LIMIT 8",
     [$item['category_id'], $item['id'], $item['city'] ?: null]);
 $specs = [];
 if ($type === 'product') {
@@ -129,7 +130,8 @@ include __DIR__ . '/../views/layout_top.php';
       </ul>
     </nav>
 
-    <div class="gallery" x-data="{ active: <?= json_encode($media ? img_url($media[0]['file_url']) : '', JSON_UNESCAPED_SLASHES) ?> }">
+    <?php $initialGalleryImage = $media ? img_url($media[0]['file_url']) : ''; ?>
+    <div class="gallery" x-data="<?= e(json_encode(['active' => $initialGalleryImage], JSON_UNESCAPED_SLASHES)) ?>">
       <?php if ($media): ?>
         <img id="gallery-main" :src="active" src="<?= e(img_url($media[0]['file_url'])) ?>" alt="<?= e($title) ?>">
         <?php if (count($media) > 1): ?>
@@ -161,6 +163,12 @@ include __DIR__ . '/../views/layout_top.php';
     <?php endif; ?>
 
     <h1 class="detail-title"<?= content_lang_attr($title) ?>><?= e($title) ?></h1>
+    <div class="detail-badges" aria-label="Listing highlights">
+      <?php if (!empty($item['is_featured'])): ?><?= listing_badge('featured', 'Featured', 'star') ?><?php endif; ?>
+      <?php if (!empty($item['is_promoted'])): ?><?= listing_badge('promoted', 'Promoted', 'trend') ?><?php endif; ?>
+      <?php if ($type === 'product' && !empty($item['condition_type'])): ?><?= listing_badge('condition', ['new' => 'Brand New', 'used' => 'Used', 'refurbished' => 'Refurbished'][$item['condition_type']] ?? ucfirst($item['condition_type']), 'box') ?><?php endif; ?>
+      <?php if (!empty($item['delivery_available'])): ?><?= listing_badge('delivery', 'Delivery available', 'truck') ?><?php endif; ?>
+    </div>
     <div class="detail-sub muted">📍 <?= e(($item['subcity'] ? $item['subcity'] . ', ' : '') . ($item['city'] ?: 'Ethiopia')) ?>
       · <?= e($item['c_name']) ?> · listed <?= time_ago($item['created_at']) ?> · 👁 <?= (int)$item['views_count'] + 1 ?> views</div>
 
@@ -172,7 +180,8 @@ include __DIR__ . '/../views/layout_top.php';
         <?php else: ?>
           <span class="price"><?= money($item['price']) ?: 'Negotiable' ?></span>
         <?php endif; ?>
-        <?php if ($item['is_negotiable']): ?><span class="badge">Negotiable</span><?php endif; ?>
+        <?php if ($item['discount_price'] > 0 && $item['price'] > 0 && $item['discount_price'] < $item['price']): ?><?= listing_badge('discount', 'Save ' . (int)round(100 - $item['discount_price'] / $item['price'] * 100) . '%', 'tag') ?><?php endif; ?>
+        <?php if ($item['is_negotiable']): ?><?= listing_badge('negotiable', 'Negotiable', 'offer') ?><?php endif; ?>
       <?php elseif ($type === 'service'): ?>
         <span class="price"><?= $item['price_type'] === 'quote_required' ? 'Request a quote' : trim((PRICE_TYPES[$item['price_type']] ?? '') . ' ' . money($item['starting_price'])) ?></span>
       <?php else: ?>
@@ -283,7 +292,11 @@ include __DIR__ . '/../views/layout_top.php';
       <div><?= star_rating($item['b_rating'], (int)$item['b_rating_count']) ?></div>
       <div class="muted small">📍 <?= e($item['b_city'] ?: 'Ethiopia') ?> · joined <?= date('M Y', strtotime($item['b_joined'])) ?></div>
       <?php if ($item['b_phone']): ?>
+        <?php if (business_phone_unlocked($u, (int)$item['business_id'])): ?>
         <a class="btn btn-outline btn-block reveal-phone" href="tel:<?= e($item['b_phone']) ?>" data-phone="<?= e($item['b_phone']) ?>" aria-label="Call seller at <?= e($item['b_phone']) ?>">📞 Show phone number</a>
+        <?php else: ?>
+        <a class="btn btn-outline btn-block" href="#contact-seller" title="Message the seller first — the phone number unlocks once you've sent an inquiry">💬 Message to unlock phone</a>
+        <?php endif; ?>
       <?php endif; ?>
       <a class="btn btn-ghost btn-block" href="<?= url('businesses/' . e($item['b_slug'])) ?>">Visit shop →</a>
     </div>
@@ -424,7 +437,11 @@ include __DIR__ . '/../views/layout_top.php';
     <a class="btn btn-primary" href="<?= url('businesses/' . e($item['b_slug'])) ?>">Visit shop</a>
   <?php endif; ?>
   <?php if ($item['b_phone']): ?>
+    <?php if (business_phone_unlocked($u, (int)$item['business_id'])): ?>
     <a class="btn btn-outline reveal-phone" href="tel:<?= e($item['b_phone']) ?>" data-phone="<?= e($item['b_phone']) ?>" aria-label="Call seller at <?= e($item['b_phone']) ?>">📞 Show phone</a>
+    <?php else: ?>
+    <a class="btn btn-outline" href="#contact-seller">💬 Message to unlock phone</a>
+    <?php endif; ?>
   <?php endif; ?>
 </div>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>

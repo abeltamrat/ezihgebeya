@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { vendorApi, type ListingType } from '../api/vendor';
 import { DashLayout } from '../components/DashLayout';
 import { ApiError } from '../api/client';
+import { ListingBadge } from '../components/ListingBadge';
 
 const TYPE_LABELS: Record<ListingType, string> = { product: 'Products', service: 'Services', supply: 'Supplies' };
 
@@ -23,10 +24,13 @@ export function VendorListings() {
 
   return (
     <DashLayout>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1>My {TYPE_LABELS[ltype]} ({data?.data.length ?? 0})</h1>
+      <div className="page-title">
+        <div>
+          <p className="eyebrow">Inventory manager</p>
+          <h1>{TYPE_LABELS[ltype]} <span className="count-pill">{data?.data.length ?? 0}</span></h1>
+        </div>
         <Link className="btn btn-primary" to={`/vendor/listings/${ltype}/new`}>
-          + Add {ltype}
+          Add {ltype}
         </Link>
       </div>
 
@@ -49,9 +53,22 @@ export function VendorListings() {
               </tr>
             </thead>
             <tbody>
-              {data.data.map((l) => (
-                <tr key={l.id}>
-                  <td>{l.title}</td>
+              {data.data.map((l) => {
+                const regularPrice = Number(l.price ?? 0);
+                const salePrice = Number(l.discount_price ?? 0);
+                const discount = regularPrice > 0 && salePrice > 0 && salePrice < regularPrice ? Math.round(100 - salePrice / regularPrice * 100) : 0;
+                return <tr key={l.id}>
+                  <td>
+                    <strong>{l.title}</strong>
+                    <div className="listing-badges">
+                      {l.is_featured ? <ListingBadge variant="featured">Featured</ListingBadge> : null}
+                      {l.condition_type ? <ListingBadge variant="condition">{l.condition_type === 'new' ? 'Brand new' : l.condition_type}</ListingBadge> : null}
+                      {discount ? <ListingBadge variant="discount">Save {discount}%</ListingBadge> : null}
+                      {l.delivery_available ? <ListingBadge variant="delivery">Delivery</ListingBadge> : null}
+                      {l.is_negotiable ? <ListingBadge variant="negotiable">Negotiable</ListingBadge> : null}
+                    </div>
+                    <div className="muted small">{l.city}{l.subcity ? ` · ${l.subcity}` : ''}</div>
+                  </td>
                   <td>{l.category_name}</td>
                   <td>{l.price ? `${l.price} ETB` : '—'}</td>
                   <td>
@@ -59,12 +76,12 @@ export function VendorListings() {
                   </td>
                   <td>{l.views}</td>
                   <td>{l.inquiries}</td>
-                  <td style={{ display: 'flex', gap: 8 }}>
-                    <a href={l.public_url}>View</a>
-                    <Link to={`/vendor/listings/${ltype}/${l.id}/edit`}>Edit</Link>
+                  <td>
+                    <div className="table-actions">
+                      <a className="btn btn-ghost btn-sm" href={l.public_url}>View</a>
+                      <Link className="btn btn-outline btn-sm" to={`/vendor/listings/${ltype}/${l.id}/edit`}>Edit</Link>
                     <button
-                      className="btn btn-outline"
-                      style={{ padding: '2px 8px', minHeight: 'auto' }}
+                      className="btn btn-ghost btn-sm danger-link"
                       disabled={deleteMutation.isPending}
                       onClick={() => {
                         if (confirm('Delete this listing?')) deleteMutation.mutate(l.id);
@@ -72,9 +89,10 @@ export function VendorListings() {
                     >
                       Delete
                     </button>
+                    </div>
                   </td>
-                </tr>
-              ))}
+                </tr>;
+              })}
             </tbody>
           </table>
         </div>

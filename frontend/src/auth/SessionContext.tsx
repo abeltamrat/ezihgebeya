@@ -1,35 +1,12 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api, setCsrfToken } from '../api/client';
+import { registerPushIfConfigured } from '../push';
+import { applyServerTheme } from '../theme';
+import { SessionContext, type SessionUser, type ShellState } from './session';
 
-export interface SessionUser {
-  id: number;
-  name: string;
-  phone: string;
-  email: string | null;
-  account_type: string;
-  phone_verified: boolean;
-}
-
-export interface ShellState {
-  authenticated: boolean;
-  home_url: string;
-  browse_url: string;
-  cart_url: string;
-  cart_count: number;
-  cart_enabled: boolean;
-  sell_url: string;
-  sell_label: string;
-  login_url?: string;
-  register_url?: string;
-  account_url?: string;
-  account_label?: string;
-  notifications_url?: string;
-  notification_count?: number;
-  logout_url?: string;
-  business_profile_url?: string | null;
-  public_business_url?: string | null;
-}
-
+// Firebase's client-side web config is designed to be public (it identifies the project,
+// it is not a secret) — see app/notify.php's server-side fcm_service_account_json for the
+// credential that must never reach the browser.
 interface MeResponse {
   ok: true;
   authenticated: boolean;
@@ -37,16 +14,6 @@ interface MeResponse {
   user?: SessionUser;
   shell: ShellState;
 }
-
-interface SessionState {
-  loading: boolean;
-  authenticated: boolean;
-  user: SessionUser | null;
-  shell: ShellState | null;
-  refresh: () => Promise<void>;
-}
-
-const SessionContext = createContext<SessionState | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
@@ -62,6 +29,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setAuthenticated(data.authenticated);
       setUser(data.user ?? null);
       setShell(data.shell);
+      applyServerTheme(data.shell.theme);
+      if (data.authenticated) void registerPushIfConfigured(data.shell.fcm_web_config);
     } finally {
       setLoading(false);
     }
@@ -76,10 +45,4 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       {children}
     </SessionContext.Provider>
   );
-}
-
-export function useSession(): SessionState {
-  const ctx = useContext(SessionContext);
-  if (!ctx) throw new Error('useSession must be used within a SessionProvider');
-  return ctx;
 }

@@ -47,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
            VALUES (?,?,?,?,?,?,?,?, 'pending')",
           [$biz['id'], $promotableType, $promotableId, $ptype, $weeks, $biz['city'], $biz['subcity'], $cost]);
         $pid = (int)db()->lastInsertId();
-        $proof = upload_image($_FILES['proof_image'] ?? [], 'payments');
+        $proof = upload_image($_FILES['proof_image'] ?? [], 'payments', true);
         q("INSERT INTO payments (payer_id, business_id, promotion_id, payment_type, amount, payment_method, reference_number, proof_image)
            VALUES (?,?,?, 'ad_payment', ?,?,?,?)", [$u['id'], $biz['id'], $pid, $cost, $method, $ref ?: null, $proof]);
         flash('Promotion request submitted (' . money($cost) . '). It activates once admin confirms your payment.');

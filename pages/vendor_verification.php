@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     foreach ($docTypes as $key => $label) {
         $f = $_FILES['doc_' . $key] ?? null;
         if ($f && ($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
-            $path = upload_image($f, 'verification');
+            $path = upload_image($f, 'verification', true);
             if ($path) $files[] = [$key, $path];
         }
     }
@@ -124,7 +124,7 @@ include __DIR__ . '/../views/layout_top.php';
           <?php if (!empty($docsByReq[$r['id']])): ?>
             <div class="btn-row">
               <?php foreach ($docsByReq[$r['id']] as $d): ?>
-                <a class="btn btn-ghost btn-sm" target="_blank" href="<?= e(img_url($d['file_url'])) ?>">📄 <?= e(str_replace('_', ' ', $d['doc_type'])) ?></a>
+                <a class="btn btn-ghost btn-sm" target="_blank" href="<?= e(url('download/verification/' . $d['id'])) ?>">📄 <?= e(str_replace('_', ' ', $d['doc_type'])) ?></a>
               <?php endforeach; ?>
             </div>
           <?php endif; ?>

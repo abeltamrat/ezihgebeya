@@ -68,6 +68,7 @@ if ($do === 'vr_review' && in_array($_POST['status'] ?? '', ['approved', 'reject
     }
 } elseif ($do === 'admin_revoke' && $isSuper && $id !== (int)$u['id']) {
     q("UPDATE users SET account_type = 'customer' WHERE id = ? AND account_type = 'admin'", [$id]);
+    remembered_login_revoke_user($id);
     flash('Admin rights revoked.');
 
 } elseif ($do === 'backup_download' && $isSuper) {
@@ -205,8 +206,9 @@ if ($do === 'vr_review' && in_array($_POST['status'] ?? '', ['approved', 'reject
             $pass = (string)($_POST['db_pass'] ?? '');
             if ($name === '') throw new RuntimeException('Database name is required.');
             $pdo = new PDO('mysql:host=' . $host . ';charset=utf8mb4', $user, $pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-            $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-            $pdo->exec("USE `{$name}`");
+            $dbIdent = db_tool_ident($name);
+            $pdo->exec("CREATE DATABASE IF NOT EXISTS {$dbIdent} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            $pdo->exec("USE {$dbIdent}");
             $sql = db_tool_sql_file('setup.sql');
             $sql = preg_replace('/^\s*CREATE\s+DATABASE\b.*?;\s*/ims', '', $sql);
             $sql = preg_replace('/^\s*USE\s+`?[\w]+`?\s*;\s*/ims', '', $sql);
@@ -241,6 +243,15 @@ if ($do === 'vr_review' && in_array($_POST['status'] ?? '', ['approved', 'reject
         $summary = [];
         foreach ($files as $file) {
             $base = basename($file);
+            // An applied migration is immutable release history. Re-running every file used
+            // to turn healthy ALTER migrations into "partial" on the next deploy because
+            // duplicate-column errors were counted as skips. Only missing/partial entries
+            // need healing; already-applied files must remain untouched.
+            $existing = row("SELECT status FROM db_migrations WHERE migration = ?", [$base]);
+            if (($existing['status'] ?? null) === 'applied') {
+                $summary[] = $base . ': already applied';
+                continue;
+            }
             $sql = db_tool_sql_file($base);
             $sql = preg_replace('/^\s*USE\s+`?[\w]+`?\s*;\s*/ims', '', $sql);
             $ran = db_tool_exec_sql(db(), $sql, true);
@@ -260,9 +271,9 @@ if ($do === 'vr_review' && in_array($_POST['status'] ?? '', ['approved', 'reject
         $tables = rows("SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'", [DB_NAME]);
         $count = 0;
         foreach ($tables as $t) {
-            $name = str_replace('`', '', $t['table_name']);
-            q("REPAIR TABLE `{$name}`");
-            q("OPTIMIZE TABLE `{$name}`");
+            $name = db_tool_ident((string)$t['table_name']);
+            q("REPAIR TABLE {$name}");
+            q("OPTIMIZE TABLE {$name}");
             $count++;
         }
         flash('Database repair/optimize completed for ' . $count . ' tables.');
@@ -291,29 +302,34 @@ if ($do === 'vr_review' && in_array($_POST['status'] ?? '', ['approved', 'reject
 
 /** Pure-PHP SQL dump — portable across hosts that disable exec()/passthru(). Reads in
  * chunks so large tables don't exhaust the PHP memory limit on shared hosting. */
+function db_tool_ident(string $name): string {
+    return '`' . str_replace('`', '``', $name) . '`';
+}
+
 function db_tool_dump_sql(PDO $pdo, string $dbName, bool $schemaOnly): string {
     $out = "-- EzihGebeya backup ({$dbName}) — " . date('c') . "\n";
     $out .= "SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n";
     $tables = $pdo->query("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")->fetchAll(PDO::FETCH_NUM);
     foreach ($tables as [$table]) {
-        $out .= "DROP TABLE IF EXISTS `{$table}`;\n";
-        $create = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch(PDO::FETCH_NUM)[1];
+        $tableIdent = db_tool_ident((string)$table);
+        $out .= "DROP TABLE IF EXISTS {$tableIdent};\n";
+        $create = $pdo->query("SHOW CREATE TABLE {$tableIdent}")->fetch(PDO::FETCH_NUM)[1];
         $out .= $create . ";\n\n";
         if ($schemaOnly) continue;
 
-        $count = (int)$pdo->query("SELECT COUNT(*) FROM `{$table}`")->fetchColumn();
+        $count = (int)$pdo->query("SELECT COUNT(*) FROM {$tableIdent}")->fetchColumn();
         $chunk = 500;
         $cols = null;
         for ($offset = 0; $offset < $count; $offset += $chunk) {
-            $stmt = $pdo->query("SELECT * FROM `{$table}` LIMIT {$chunk} OFFSET {$offset}");
+            $stmt = $pdo->query("SELECT * FROM {$tableIdent} LIMIT {$chunk} OFFSET {$offset}");
             $rowsBuf = [];
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                if ($cols === null) $cols = array_map(fn($c) => "`$c`", array_keys($row));
+                if ($cols === null) $cols = array_map(fn($c) => db_tool_ident((string)$c), array_keys($row));
                 $vals = array_map(fn($v) => $v === null ? 'NULL' : $pdo->quote((string)$v), array_values($row));
                 $rowsBuf[] = '(' . implode(',', $vals) . ')';
             }
             if ($rowsBuf) {
-                $out .= "INSERT INTO `{$table}` (" . implode(',', $cols) . ") VALUES\n" . implode(",\n", $rowsBuf) . ";\n";
+                $out .= "INSERT INTO {$tableIdent} (" . implode(',', $cols) . ") VALUES\n" . implode(",\n", $rowsBuf) . ";\n";
             }
         }
         if ($count > 0) $out .= "\n";

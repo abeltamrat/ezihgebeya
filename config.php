@@ -19,6 +19,10 @@ define('UPLOAD_DIR', __DIR__ . '/uploads');
 define('UPLOAD_URL', BASE_URL . '/uploads');
 define('MAX_UPLOAD_BYTES', 30 * 1024 * 1024);
 define('CACHE_DIR', __DIR__ . '/storage/cache'); // not web-addressable; see app/cache.php
+// Verification documents and payment proofs: not public media like listing photos, so they
+// live outside uploads/ entirely, blocked from direct web access by .htaccess, and are only
+// ever reachable through the authorized download endpoint in pages/download.php.
+define('PROTECTED_UPLOAD_DIR', __DIR__ . '/protected_uploads');
 
 // Location data (MVP: config-driven; move to DB when scaling)
 const CITIES = [
@@ -91,6 +95,26 @@ const PROMO_TYPES = [
     'homepage_banner'        => ['label' => 'Homepage banner',        'price' => 1000, 'target' => 'listing'],
     'video_feed_boost'       => ['label' => 'Video feed boost',       'price' => 350,  'target' => 'video'],
     'business_profile_boost' => ['label' => 'Business profile boost', 'price' => 600,  'target' => 'business'],
+];
+
+// Tenant monetization ladder (PLAN.md "Tenant monetization ladder"). Launch prices, confirmed
+// by [You] — intentionally low to test willingness to pay before any gateway integration.
+// TOP Pin: single-listing pin, flat price for a fixed duration (not the per-week PROMO_TYPES
+// model) — reuses the `promotions` table with promotion_type='top_pin' and duration_days.
+const TOP_PIN_PACKAGES = [
+    'top_pin_7'  => ['label' => 'TOP Pin — 7 days',  'price' => 150, 'duration_days' => 7],
+    'top_pin_30' => ['label' => 'TOP Pin — 30 days', 'price' => 450, 'duration_days' => 30],
+];
+
+// Boost subscription: vendor-wide ranking lift + analytics — reuses the `subscriptions` table
+// with type='boost' (never conflated with the listing-quota `type='listing_plan'` PLANS above).
+const BOOST_TIERS = [
+    'boost_basic' => ['label' => 'Boost Basic', 'price' => 500,  'rank_weight' => 1,
+        'benefits' => ['Light ranking lift for all your listings', 'More "similar listings" exposure', 'Basic analytics']],
+    'boost_pro'   => ['label' => 'Boost Pro',   'price' => 1000, 'rank_weight' => 2,
+        'benefits' => ['Stronger ranking lift for all your listings', 'Auto-refreshed listing freshness', 'Full analytics']],
+    'boost_max'   => ['label' => 'Boost Max',   'price' => 2000, 'rank_weight' => 3,
+        'benefits' => ['Highest ranking lift for all your listings', 'Priority "similar listings" placement', 'Full analytics', 'Sales callback support']],
 ];
 
 const PAYMENT_METHODS = ['bank_transfer' => 'Bank Transfer', 'telebirr' => 'Telebirr', 'cbe_birr' => 'CBE Birr'];

@@ -61,7 +61,7 @@ include __DIR__ . '/../views/layout_top.php';
         <div class="inq-status-form">
           💳 <?= money($p['amount']) ?> via <?= e(str_replace('_', ' ', $p['payment_method'])) ?>
           <?= $p['reference_number'] ? '· ref <b>' . e($p['reference_number']) . '</b>' : '' ?>
-          <?php if ($p['proof_image']): ?><a href="<?= e(img_url($p['proof_image'])) ?>" target="_blank">view proof</a><?php endif; ?>
+          <?php if ($p['proof_image']): ?><a href="<?= e(url('download/payment/' . $p['id'])) ?>" target="_blank">view proof</a><?php endif; ?>
           <span class="badge badge-status-<?= $p['status'] === 'confirmed' ? 'active' : ($p['status'] === 'rejected' ? 'rejected' : 'pending') ?>"><?= e($p['status']) ?></span>
           <?php if ($p['status'] === 'pending'): ?>
             <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="confirm_payment"><input type="hidden" name="payment_id" value="<?= $p['id'] ?>">

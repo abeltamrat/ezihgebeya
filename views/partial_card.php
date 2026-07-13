@@ -6,10 +6,14 @@ $href = listing_url($cardType, $item);
 $price = '';
 $oldPrice = '';
 $conditionLabel = '';
+$discountPercent = 0;
 if ($cardType === 'product') {
     $price = $item['discount_price'] > 0 ? money($item['discount_price']) : money($item['price']);
     $oldPrice = $item['discount_price'] > 0 && $item['price'] > 0 ? money($item['price']) : '';
     $conditionLabel = ['new' => 'Brand New', 'used' => 'Used', 'refurbished' => 'Refurbished'][$item['condition_type'] ?? ''] ?? '';
+    if (($item['discount_price'] ?? 0) > 0 && ($item['price'] ?? 0) > 0 && $item['discount_price'] < $item['price']) {
+        $discountPercent = (int)round(100 - $item['discount_price'] / $item['price'] * 100);
+    }
 } elseif ($cardType === 'service') {
     $price = $item['price_type'] === 'quote_required' ? 'Quote on request'
         : (PRICE_TYPES[$item['price_type']] ?? '') . ' ' . money($item['starting_price']);
@@ -33,12 +37,11 @@ $cardLabel = trim($title . ($price ? ', ' . strip_tags($price) : '') . ', ' . ((
     <?php if ($img): ?><img src="<?= e($img) ?>" alt="<?= e($title) ?>" loading="lazy">
     <?php else: ?><div class="card-placeholder" aria-hidden="true"><span class="icon-chip"><?= e($typeInitial) ?></span></div><?php endif; ?>
     <div class="card-media-badges">
-      <?php if (!empty($ui['show_featured_badge']) && !empty($item['is_featured'])): ?><span class="badge badge-featured">Featured</span><?php endif; ?>
-      <?php if (!empty($item['is_promoted'])): ?><span class="badge badge-premium">Premium</span><?php endif; ?>
-      <?php if ($conditionLabel): ?><span class="badge badge-condition"><?= e($conditionLabel) ?></span><?php endif; ?>
+      <?php if (!empty($ui['show_featured_badge']) && !empty($item['is_featured'])): ?><?= listing_badge('featured', 'Featured', 'star') ?><?php endif; ?>
+      <?php if (!empty($item['is_promoted'])): ?><?= listing_badge('promoted', 'Promoted', 'trend') ?><?php endif; ?>
     </div>
-    <?php if ($cardType === 'product' && $item['discount_price'] > 0 && $item['price'] > 0): ?>
-      <span class="badge badge-discount">-<?= round(100 - $item['discount_price'] / $item['price'] * 100) ?>%</span>
+    <?php if ($discountPercent > 0): ?>
+      <?= listing_badge('discount', 'Save ' . $discountPercent . '%', 'tag') ?>
     <?php endif; ?>
   </div>
   <div class="card-body">
@@ -50,6 +53,13 @@ $cardLabel = trim($title . ($price ? ', ' . strip_tags($price) : '') . ', ' . ((
     </div>
     <?php endif; ?>
     <h3 class="card-title"<?= content_lang_attr($title) ?>><?= e($title) ?></h3>
+    <?php if ($conditionLabel || !empty($item['delivery_available']) || !empty($item['is_negotiable'])): ?>
+    <div class="card-attributes" aria-label="Item highlights">
+      <?php if ($conditionLabel): ?><?= listing_badge('condition', $conditionLabel, 'box') ?><?php endif; ?>
+      <?php if (!empty($item['delivery_available'])): ?><?= listing_badge('delivery', 'Delivery', 'truck') ?><?php endif; ?>
+      <?php if (!empty($item['is_negotiable'])): ?><?= listing_badge('negotiable', 'Negotiable', 'offer') ?><?php endif; ?>
+    </div>
+    <?php endif; ?>
     <?php if (!empty($ui['show_card_location'])): ?>
     <div class="card-meta">
       <span class="card-ico"><?= system_ui_icon('pin', 'Location') ?></span>

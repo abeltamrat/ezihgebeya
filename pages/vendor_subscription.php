@@ -13,11 +13,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ref = trim($_POST['reference_number'] ?? '');
     $methods = payment_methods(false);
     $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
+    if (val("SELECT COUNT(*) FROM subscriptions WHERE business_id = ? AND type = 'listing_plan' AND status = 'pending'", [$biz['id']])) {
+        flash('You already have a plan request awaiting admin confirmation. It will activate once reviewed.', 'error');
+        redirect('vendor/subscription');
+    }
     if (isset(plans()[$newPlan]) && $newPlan !== 'free') {
         $cost = plans()[$newPlan]['price'] * $months;
         q("INSERT INTO subscriptions (business_id, plan, months, status) VALUES (?,?,?, 'pending')", [$biz['id'], $newPlan, $months]);
         $sid = (int)db()->lastInsertId();
-        $proof = upload_image($_FILES['proof_image'] ?? [], 'payments');
+        $proof = upload_image($_FILES['proof_image'] ?? [], 'payments', true);
         q("INSERT INTO payments (payer_id, business_id, subscription_id, payment_type, amount, payment_method, reference_number, proof_image)
            VALUES (?,?,?, 'subscription_payment', ?,?,?,?)", [$u['id'], $biz['id'], $sid, $cost, $method, $ref ?: null, $proof]);
         flash('Upgrade requested (' . money($cost) . '). Your plan activates once admin confirms payment.');

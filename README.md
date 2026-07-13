@@ -158,14 +158,29 @@ development/build-time tools only.
 
 2. Upload the PHP app, `assets/`, `views/`, `pages/`, `app/`, `database/`,
    `uploads/.htaccess`, `sw.js`, and the built Vite static files.
-   Copy `frontend/dist/index.html` to `app/index.html` on the host and copy
-   `frontend/dist/assets/` to `app/assets/`; `/app/*` routes are served by the
-   static Vite shell while `/api/*` stays on the PHP front controller.
+   Run `npm run spa:sync` (root) after the frontend build — it clears stale
+   content-hashed bundles from `app/assets/` and copies `frontend/dist/` into
+   `app/`; `/app/*` routes are served by the static Vite shell while `/api/*`
+   stays on the PHP front controller.
 3. Do not upload development caches, local logs, `.env` files, or `node_modules/`.
 4. Confirm the production domain/base path before final upload. Root-domain
    hosting should use the existing empty production `BASE_URL`; subdirectory
    hosting must be tested with that subdirectory in manifest, service-worker,
    upload, and React routes.
+
+Before uploading, run the repeatable local release gates:
+
+```
+php tests/backend_regression.php
+php tools/release_check.php
+cd frontend && npm test && npm run lint && npm run build
+```
+
+Run `php tools/release_check.php --production` in the final production-configured
+environment. It exits non-zero when the React build is missing, runtime
+directories are not writable, database access fails, migrations are missing or
+partial, development mode is enabled, the cron secret is empty, or local XAMPP
+database credentials are still active. The check is read-only.
 
 ### Production configuration
 

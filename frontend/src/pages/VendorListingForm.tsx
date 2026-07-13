@@ -61,7 +61,7 @@ export function VendorListingForm() {
       const result = listingId
         ? await vendorApi.update(ltype, listingId, payload)
         : await vendorApi.create(ltype, payload);
-      if (ltype === 'product' && imageFiles && imageFiles.length > 0) {
+      if (imageFiles && imageFiles.length > 0) {
         await vendorApi.uploadImages(ltype, result.data.id, imageFiles);
       }
       return result;
@@ -77,6 +77,22 @@ export function VendorListingForm() {
       } else {
         setErrors(['Something went wrong. Try again.']);
       }
+    },
+  });
+
+  const mediaMutation = useMutation({
+    mutationFn: ({ action, imageId }: { action: 'primary' | 'delete'; imageId?: number }) => {
+      if (!listingId) throw new Error('Listing id is required.');
+      return action === 'primary'
+        ? vendorApi.setPrimaryImage(listingId, imageId as number)
+        : vendorApi.deleteImage(ltype, listingId, imageId);
+    },
+    onSuccess: () => {
+      if (listingId) queryClient.invalidateQueries({ queryKey: ['vendor', 'listing', ltype, listingId] });
+      queryClient.invalidateQueries({ queryKey: ['vendor', 'listings', ltype] });
+    },
+    onError: (err) => {
+      setErrors([err instanceof ApiError ? err.message : 'Could not update listing media.']);
     },
   });
 
@@ -96,6 +112,7 @@ export function VendorListingForm() {
 
   const meta = metaQuery.data;
   const subcityOptions = fields.city ? meta?.subcities[String(fields.city)] ?? [] : [];
+  const currentImages = itemQuery.data?.data.images ?? [];
 
   return (
     <DashLayout>
@@ -247,6 +264,42 @@ export function VendorListingForm() {
               Images
               <input type="file" accept="image/*" multiple onChange={(e) => setImageFiles(e.target.files)} />
             </label>
+            {listingId && currentImages.length > 0 && (
+              <div className="span2 media-grid" aria-label="Current product images">
+                {currentImages.map((image) => (
+                  <div className="media-tile" key={image.id}>
+                    <img src={image.url} alt="" />
+                    <div className="media-actions">
+                      <span className={`badge ${image.is_primary ? 'badge-status-active' : ''}`}>
+                        {image.is_primary ? 'Primary' : 'Image'}
+                      </span>
+                      {!image.is_primary && image.id > 0 && (
+                        <button
+                          className="btn btn-outline btn-sm"
+                          type="button"
+                          disabled={mediaMutation.isPending}
+                          onClick={() => mediaMutation.mutate({ action: 'primary', imageId: image.id })}
+                        >
+                          Make primary
+                        </button>
+                      )}
+                      {image.id > 0 && (
+                        <button
+                          className="btn btn-error btn-sm"
+                          type="button"
+                          disabled={mediaMutation.isPending}
+                          onClick={() => {
+                            if (confirm('Delete this image?')) mediaMutation.mutate({ action: 'delete', imageId: image.id });
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 
@@ -273,6 +326,35 @@ export function VendorListingForm() {
               Unit
               <input value={String(fields.unit_of_measurement ?? 'piece')} onChange={(e) => setField('unit_of_measurement', e.target.value)} />
             </label>
+          </>
+        )}
+
+        {ltype !== 'product' && (
+          <>
+            <label className="span2">
+              Image
+              <input type="file" accept="image/*" onChange={(e) => setImageFiles(e.target.files)} />
+            </label>
+            {listingId && currentImages.length > 0 && (
+              <div className="span2 media-grid" aria-label="Current listing image">
+                <div className="media-tile">
+                  <img src={currentImages[0].url} alt="" />
+                  <div className="media-actions">
+                    <span className="badge badge-status-active">Current image</span>
+                    <button
+                      className="btn btn-error btn-sm"
+                      type="button"
+                      disabled={mediaMutation.isPending}
+                      onClick={() => {
+                        if (confirm('Delete this image?')) mediaMutation.mutate({ action: 'delete' });
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
 

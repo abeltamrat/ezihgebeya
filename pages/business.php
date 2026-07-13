@@ -78,11 +78,36 @@ include __DIR__ . '/../views/layout_top.php';
       </div>
     </div>
     <div class="biz-actions">
-      <?php if ($biz['phone']): ?><a class="btn btn-primary" href="tel:<?= e($biz['phone']) ?>">📞 Call</a><?php endif; ?>
+      <?php if ($biz['phone']): ?>
+        <?php if (business_phone_unlocked($u, (int)$biz['id'])): ?>
+        <a class="btn btn-primary" href="tel:<?= e($biz['phone']) ?>">📞 Call</a>
+        <?php else: ?>
+        <a class="btn btn-primary" href="#listings" title="Message the seller on a listing first — the phone number unlocks once you've sent an inquiry">💬 Message a listing to unlock phone</a>
+        <?php endif; ?>
+      <?php endif; ?>
     </div>
   </div>
   <?php if ($biz['description']): ?><p class="biz-desc"><?= nl2br(e($biz['description'])) ?></p><?php endif; ?>
 
+  <form method="post" action="<?= url('report') ?>" class="report-form">
+    <?= csrf_field() ?>
+    <input type="hidden" name="reported_type" value="business">
+    <input type="hidden" name="reported_id" value="<?= $biz['id'] ?>">
+    <details>
+      <summary>🚩 Report this seller</summary>
+      <label>Reason
+        <select name="reason">
+          <?php foreach (['Scam suspicion', 'Fake or misleading listings', 'Not responding / ghosting buyers', 'Offensive behavior', 'Counterfeit or prohibited items', 'Other'] as $r): ?>
+            <option><?= $r ?></option>
+          <?php endforeach; ?>
+        </select>
+      </label>
+      <label>Details <textarea name="description" rows="2" maxlength="1000"></textarea></label>
+      <button class="btn btn-outline btn-sm">Send report</button>
+    </details>
+  </form>
+
+  <div id="listings"></div>
   <?php foreach ([['product', 'Products', $products], ['service', 'Services', $services], ['supply', 'Supplies', $supplies]] as [$t, $label, $list]): if ($list): ?>
     <h2 class="section-gap"><?= $label ?> (<?= count($list) ?>)</h2>
     <div class="grid">

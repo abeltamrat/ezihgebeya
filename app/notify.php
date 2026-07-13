@@ -52,6 +52,117 @@ function send_sms(string $phone, string $message): void {
     }
 }
 
+// ---------- Firebase Cloud Messaging web push ----------
+// Same pluggable/graceful-degrade pattern as send_sms() above: always logged to the
+// outbox; the real network calls only fire once admin → Settings → Notifications has a
+// Firebase project ID + service account configured, and never in DEV_MODE.
+
+/** POST JSON to a fixed, explicitly allowed HTTPS host and return the decoded response
+ * (or null on any failure). Not a general SSRF-safe fetcher — deliberately narrow, only
+ * ever called with the two hardcoded Google endpoints below, never a user/admin-supplied URL. */
+function remote_post_json(string $url, array $headers, string $body, int $timeout = 8): ?array {
+    $host = parse_url($url, PHP_URL_HOST);
+    if (!$host || !remote_url_allowed($url, [$host])) return null;
+    if (!function_exists('curl_init')) return null;
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_CONNECTTIMEOUT => min(4, $timeout),
+        CURLOPT_TIMEOUT => $timeout,
+    ]);
+    $raw = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    if (!is_string($raw) || $status < 200 || $status >= 300) return null;
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+/** Base64url-encode (RFC 4648 §5) — JWT's encoding, distinct from base64_encode(). */
+function base64url_encode(string $data): string {
+    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+}
+
+/** Mint (and cache for ~55 minutes, short of FCM's real 60-minute expiry) an OAuth2
+ * access token for the configured Firebase service account, via the standard Google
+ * JWT-bearer flow (RFC 7523). Returns null if unconfigured, malformed, or the token
+ * endpoint call fails — every caller must treat that as "push unavailable right now"
+ * and fall back to the outbox log, never throw. */
+function fcm_access_token(): ?string {
+    $json = (string)sys('notifications.fcm_service_account_json', '');
+    if ($json === '') return null;
+    return cache_remember('fcm_access_token_' . md5($json), 3300, function () use ($json): ?string {
+        $account = json_decode($json, true);
+        $privateKey = $account['private_key'] ?? null;
+        $clientEmail = $account['client_email'] ?? null;
+        if (!$privateKey || !$clientEmail) return null;
+
+        $now = time();
+        $header = base64url_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
+        $claims = base64url_encode(json_encode([
+            'iss' => $clientEmail,
+            'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
+            'aud' => 'https://oauth2.googleapis.com/token',
+            'iat' => $now,
+            'exp' => $now + 3600,
+        ]));
+        $signature = '';
+        $signed = openssl_sign("$header.$claims", $signature, $privateKey, OPENSSL_ALGO_SHA256);
+        if (!$signed) return null;
+        $jwt = "$header.$claims." . base64url_encode($signature);
+
+        $resp = remote_post_json(
+            'https://oauth2.googleapis.com/token',
+            ['Content-Type: application/x-www-form-urlencoded'],
+            http_build_query(['grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer', 'assertion' => $jwt]),
+        );
+        return $resp['access_token'] ?? null;
+    }) ?: null;
+}
+
+/** Send a web push notification to every device the user has registered (see
+ * push_subscriptions, populated by POST /api/v1/push/subscribe). Always logged to the
+ * outbox first; the real FCM v1 send only happens when a project + service account are
+ * configured. A token FCM reports as unregistered/invalid is pruned so it stops being
+ * retried on every future notification. */
+function send_push(int $userId, string $title, string $body, string $url = ''): void {
+    outbox_log('push', (string)$userId, "$title — $body");
+    $projectId = (string)sys('notifications.fcm_project_id', '');
+    if ($projectId === '' || DEV_MODE || !db_table_exists('push_subscriptions')) return;
+    $accessToken = fcm_access_token();
+    if (!$accessToken) { outbox_log('push-error', (string)$userId, 'no access token (check service account config)'); return; }
+
+    $tokens = rows("SELECT id, fcm_token FROM push_subscriptions WHERE user_id = ?", [$userId]);
+    foreach ($tokens as $t) {
+        $message = [
+            'message' => [
+                'token' => $t['fcm_token'],
+                'notification' => ['title' => mb_substr($title, 0, 200), 'body' => mb_substr($body, 0, 500)],
+            ],
+        ];
+        if ($url !== '') $message['message']['webpush'] = ['fcm_options' => ['link' => $url]];
+        try {
+            $resp = remote_post_json(
+                "https://fcm.googleapis.com/v1/projects/$projectId/messages:send",
+                ['Authorization: Bearer ' . $accessToken, 'Content-Type: application/json'],
+                json_encode($message),
+            );
+            if ($resp === null) {
+                // Distinguish "unregistered" (dead token, safe to prune) from a transient
+                // failure (network/quota/etc, keep the token and just skip this send) is not
+                // possible from remote_post_json()'s null-on-any-failure return alone — a
+                // future iteration could inspect the raw FCM error body if this needs tuning.
+                outbox_log('push-error', $t['fcm_token'], 'send failed');
+            }
+        } catch (Throwable $e) {
+            outbox_log('push-error', $t['fcm_token'], $e->getMessage());
+        }
+    }
+}
+
 /** Send an email. MVP: PHP mail() if configured, always logged to the outbox. */
 function send_email(string $to, string $subject, string $body): void {
     outbox_log('email', $to, "$subject — $body");
@@ -189,6 +300,13 @@ function notify(?int $userId, string $type, string $title, string $url = '', str
                 if ($phone) send_sms($phone, site_name() . ': ' . $title);
             }
         }
+        // Web push mirrors the same "high-value" call sites as the SMS mirror above (order
+        // confirmed, new inquiry reply, moderation decisions, etc. — every existing caller
+        // that already passes $alsoSms=true), not a new signal to thread through every
+        // notify() call site individually.
+        if ($alsoSms && (!$isMarketing || user_marketing_opted_in($userId, 'push'))) {
+            send_push($userId, site_name(), $title, $url ? url($url) : '');
+        }
     } catch (Throwable $e) {
         // notifications must never break the main action
     }
@@ -198,6 +316,13 @@ function notify(?int $userId, string $type, string $title, string $url = '', str
 function notify_business(int $businessId, string $type, string $title, string $url = '', string $body = '', bool $alsoSms = false): void {
     $ownerId = (int)val("SELECT user_id FROM businesses WHERE id = ?", [$businessId]);
     notify($ownerId ?: null, $type, $title, $url, $body, $alsoSms);
+}
+
+/** Notify every admin/super_admin account (e.g. a new suspicious-activity trend). */
+function notify_admins(string $type, string $title, string $url = ''): void {
+    foreach (rows("SELECT id FROM users WHERE account_type IN ('admin', 'super_admin') AND status = 'active'") as $a) {
+        notify((int)$a['id'], $type, $title, $url);
+    }
 }
 
 function unread_notifications(int $userId): int {

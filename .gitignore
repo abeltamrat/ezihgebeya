@@ -17,6 +17,14 @@ vendor/
 node_modules/
 dist/
 build/
+frontend/dist/
+
+# Generated Vite SPA build copied into the PHP web root for /app/*.
+# Keep app/*.php source files tracked; only ignore the generated frontend shell/assets.
+app/index.html
+app/assets/
+app/favicon.svg
+app/icons.svg
 
 # Runtime/generated files
 *.log
@@ -30,5 +38,9 @@ uploads/payments/
 uploads/ui/
 uploads/ar-models/
 
+# Verification documents and payment proofs — real user-uploaded sensitive files, never committed
+protected_uploads/
+
 # Generated file cache (app/cache.php) — regenerated on demand
 storage/cache/*.json
+dev_router.php

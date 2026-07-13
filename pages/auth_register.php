@@ -50,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($returnTo !== '') $_SESSION['return_to'] = $returnTo;
             redirect('verify' . ($returnTo !== '' ? '?return=' . rawurlencode($returnTo) : ''));
         }
-        $default = in_array($type, VENDOR_TYPES, true) ? 'vendor/business' : 'account';
+        $default = in_array($type, VENDOR_TYPES, true) ? 'app/vendor/business' : 'app/account';
         unset($_SESSION['return_to']);
         redirect(safe_return_path($returnTo, $default));
     }

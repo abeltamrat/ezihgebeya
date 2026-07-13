@@ -27,7 +27,7 @@ $isSuper = $u['account_type'] === 'super_admin';
       <?php if ($docs): ?>
         <div class="btn-row">
           <?php foreach ($docs as $d): ?>
-            <a class="btn btn-ghost btn-sm" target="_blank" href="<?= e(img_url($d['file_url'])) ?>">📄 <?= e(str_replace('_', ' ', $d['doc_type'])) ?></a>
+            <a class="btn btn-ghost btn-sm" target="_blank" href="<?= e(url('download/verification/' . $d['id'])) ?>">📄 <?= e(str_replace('_', ' ', $d['doc_type'])) ?></a>
           <?php endforeach; ?>
         </div>
       <?php endif; ?>
@@ -526,25 +526,40 @@ $isSuper = $u['account_type'] === 'super_admin';
     $reportByType = rows("SELECT reported_type, COUNT(*) n FROM reports
         WHERE created_at > NOW() - INTERVAL 30 DAY
         GROUP BY reported_type ORDER BY n DESC LIMIT 6");
-    $underpricedFlags = (int)val("SELECT COUNT(*) FROM products p
-        JOIN (SELECT category_id, AVG(price) avg_price FROM products WHERE status='active' AND price > 0 GROUP BY category_id HAVING COUNT(*) >= 3) avg_t
-          ON avg_t.category_id = p.category_id
-        WHERE p.status = 'active' AND p.price > 0 AND p.price < avg_t.avg_price * 0.1");
-    $listingFloodFlags = (int)val("SELECT COUNT(*) FROM (
-        SELECT b.id FROM businesses b JOIN products p ON p.business_id = b.id
-        WHERE b.created_at > NOW() - INTERVAL 7 DAY GROUP BY b.id HAVING COUNT(p.id) > 10
-    ) t");
-    $reportClusterFlags = (int)val("SELECT COUNT(*) FROM (
-        SELECT reported_type, reported_id FROM reports WHERE status IN ('open','reviewing')
-        GROUP BY reported_type, reported_id HAVING COUNT(*) >= 3
-    ) t");
-    $duplicateTitleFlags = (int)val("SELECT COUNT(*) FROM (
-        SELECT title FROM products WHERE status='active' GROUP BY title HAVING COUNT(*) >= 4
-    ) t");
-    $adClickFraudFlags = (int)val("SELECT COUNT(*) FROM (
-        SELECT ad_id, ip FROM ad_events WHERE event_type='click' AND created_at > NOW() - INTERVAL 1 DAY
-        GROUP BY ad_id, ip HAVING COUNT(*) >= 5
-    ) t");
+    // Precomputed nightly by cron (pages/cron.php) into admin_suspicious_flags, so this panel
+    // doesn't re-run all 5 flag queries on every page load. Falls back to a live computation
+    // only if cron hasn't run yet (migration just applied, or a fresh install) — same
+    // degrade-gracefully convention already used elsewhere in this file for new tables.
+    $flagsRow = db_table_exists('admin_suspicious_flags') ? row("SELECT * FROM admin_suspicious_flags ORDER BY id DESC LIMIT 1") : null;
+    if ($flagsRow) {
+        $underpricedFlags = (int)$flagsRow['underpriced_flags'];
+        $listingFloodFlags = (int)$flagsRow['listing_flood_flags'];
+        $reportClusterFlags = (int)$flagsRow['report_cluster_flags'];
+        $duplicateTitleFlags = (int)$flagsRow['duplicate_title_flags'];
+        $adClickFraudFlags = (int)$flagsRow['ad_click_fraud_flags'];
+        $flagsComputedAt = $flagsRow['computed_at'];
+    } else {
+        $underpricedFlags = (int)val("SELECT COUNT(*) FROM products p
+            JOIN (SELECT category_id, AVG(price) avg_price FROM products WHERE status='active' AND price > 0 GROUP BY category_id HAVING COUNT(*) >= 3) avg_t
+              ON avg_t.category_id = p.category_id
+            WHERE p.status = 'active' AND p.price > 0 AND p.price < avg_t.avg_price * 0.1");
+        $listingFloodFlags = (int)val("SELECT COUNT(*) FROM (
+            SELECT b.id FROM businesses b JOIN products p ON p.business_id = b.id
+            WHERE b.created_at > NOW() - INTERVAL 7 DAY GROUP BY b.id HAVING COUNT(p.id) > 10
+        ) t");
+        $reportClusterFlags = (int)val("SELECT COUNT(*) FROM (
+            SELECT reported_type, reported_id FROM reports WHERE status IN ('open','reviewing')
+            GROUP BY reported_type, reported_id HAVING COUNT(*) >= 3
+        ) t");
+        $duplicateTitleFlags = (int)val("SELECT COUNT(*) FROM (
+            SELECT title FROM products WHERE status='active' GROUP BY title HAVING COUNT(*) >= 4
+        ) t");
+        $adClickFraudFlags = (int)val("SELECT COUNT(*) FROM (
+            SELECT ad_id, ip FROM ad_events WHERE event_type='click' AND created_at > NOW() - INTERVAL 1 DAY
+            GROUP BY ad_id, ip HAVING COUNT(*) >= 5
+        ) t");
+        $flagsComputedAt = null;
+    }
     $suspiciousTotal = $underpricedFlags + $listingFloodFlags + $reportClusterFlags + $duplicateTitleFlags + $adClickFraudFlags;
     ?>
     <div class="stat-grid">
@@ -559,7 +574,7 @@ $isSuper = $u['account_type'] === 'super_admin';
       <tr><th>Trust signal</th><th>Current value</th><th>Notes</th></tr>
       <tr><td>Report volume</td><td><?= number_format((int)$reportStats['total_30d']) ?> in 30d · <?= number_format((int)$reportStats['total_7d']) ?> in 7d</td><td><?= number_format((int)$reportStats['closed_30d']) ?> resolved/dismissed in the 30d window</td></tr>
       <tr><td>Moderation decisions</td><td><?= number_format(count($turnaroundHrs)) ?></td><td><?= $medianTurnaround === null ? 'No decisions yet' : 'Median turnaround ' . number_format($medianTurnaround, 1) . ' hours' ?></td></tr>
-      <tr><td>Suspicious trend</td><td><?= number_format($suspiciousTotal) ?> current flags</td><td><?= number_format($underpricedFlags) ?> underpriced · <?= number_format($listingFloodFlags) ?> floods · <?= number_format($reportClusterFlags) ?> report clusters · <?= number_format($duplicateTitleFlags) ?> duplicates · <?= number_format($adClickFraudFlags) ?> ad-click clusters</td></tr>
+      <tr><td>Suspicious trend</td><td><?= number_format($suspiciousTotal) ?> current flags</td><td><?= number_format($underpricedFlags) ?> underpriced · <?= number_format($listingFloodFlags) ?> floods · <?= number_format($reportClusterFlags) ?> report clusters · <?= number_format($duplicateTitleFlags) ?> duplicates · <?= number_format($adClickFraudFlags) ?> ad-click clusters<?= $flagsComputedAt ? ' · computed ' . time_ago($flagsComputedAt) . ' by cron' : ' · computed live (cron has not run yet)' ?></td></tr>
     </table></div>
     <?php if ($reportByType): ?>
       <h4>Reports by type, 30d</h4>
@@ -781,6 +796,15 @@ $isSuper = $u['account_type'] === 'super_admin';
       </label>
       <label>Email "from" address <input name="sys[notifications][email_from]" value="<?= e($S['notifications']['email_from']) ?>"></label>
       <p class="muted small">DEV mode is <?= DEV_MODE ? '<b>ON</b> — OTP codes are shown on screen and nothing is really sent' : 'off' ?> (toggle via <code>DEV_MODE</code> in config.php).</p>
+      <h4 class="section-gap">📲 Firebase Cloud Messaging web push</h4>
+      <p class="muted small">Blank = push disabled, logged to <code>database/outbox.log</code> only — same as the SMS gateway above. Paste your Firebase project's values below to go live; nothing else in the app needs to change.</p>
+      <label>Firebase project ID <input name="sys[notifications][fcm_project_id]" value="<?= e($S['notifications']['fcm_project_id']) ?>" placeholder="my-firebase-project"></label>
+      <label>Web app config (client-side, safe to expose — from Firebase console → Project settings → General → Your apps → SDK setup)
+        <textarea name="sys[notifications][fcm_web_config]" rows="3" placeholder='{"apiKey":"…","authDomain":"…","projectId":"…","storageBucket":"…","messagingSenderId":"…","appId":"…","vapidKey":"…"}'><?= e($S['notifications']['fcm_web_config']) ?></textarea>
+      </label>
+      <label>Service account JSON (server-side only, never sent to the browser — from Firebase console → Project settings → Service accounts → Generate new private key)
+        <textarea name="sys[notifications][fcm_service_account_json]" rows="3" placeholder='{"type":"service_account","project_id":"…","private_key":"…","client_email":"…", …}'><?= e($S['notifications']['fcm_service_account_json']) ?></textarea>
+      </label>
     </div>
 
     <div class="panel">

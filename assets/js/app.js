@@ -272,8 +272,18 @@
   attachRipples();
 
   // ── Scroll-reveal with IntersectionObserver ──────────────────────────────
+  var revealIO = null;
+  var observeReveals = function (root) {
+    var scope = root && root.querySelectorAll ? root : document;
+    var elements = scope.querySelectorAll('.reveal:not([data-reveal-bound])');
+    elements.forEach(function (el) {
+      el.dataset.revealBound = '1';
+      if (revealIO) revealIO.observe(el);
+      else el.classList.add('in-view');
+    });
+  };
   if ('IntersectionObserver' in window) {
-    var revealIO = new IntersectionObserver(function (entries) {
+    revealIO = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (entry.isIntersecting) {
           entry.target.classList.add('in-view');
@@ -281,8 +291,8 @@
         }
       });
     }, { threshold: 0.12 });
-    document.querySelectorAll('.reveal').forEach(function (el) { revealIO.observe(el); });
   }
+  observeReveals(document);
 
   // ── Page progress bar ────────────────────────────────────────────────────
   var progress = document.getElementById('page-progress');
@@ -330,6 +340,7 @@
   // ── HTMX: re-attach ripples after partial swaps ──────────────────────────
   document.addEventListener('htmx:afterSwap', function (e) {
     attachRipples(e.detail.elt);
+    observeReveals(e.detail.elt);
   });
 
   // ── HTMX global config ───────────────────────────────────────────────────

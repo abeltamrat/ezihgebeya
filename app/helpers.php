@@ -227,7 +227,7 @@ function safe_return_path(?string $path, string $fallback = ''): string {
 }
 
 function default_post_login_path(array $u): string {
-    return is_admin($u) ? 'admin' : (is_vendor($u) ? 'vendor' : 'account');
+    return is_admin($u) ? 'app/admin/health' : (is_vendor($u) ? 'app/vendor' : 'app/account');
 }
 
 function require_login(): array {
@@ -256,6 +256,19 @@ function my_business(?array $u = null): ?array {
     $u = $u ?? auth();
     if (!$u) return null;
     return row("SELECT * FROM businesses WHERE user_id = ? AND status != 'deleted'", [$u['id']]);
+}
+
+/** Whether the current viewer may see a business's raw phone number: PLAN.md "Keep first
+ * contact inside platform chat before exposing phone numbers, so response time is
+ * measurable and users are protected." True for the business's own owner, admins, and any
+ * customer who has already sent at least one inquiry to this business — false (unlock via
+ * chat first) for everyone else, including anonymous visitors. */
+function business_phone_unlocked(?array $u, int $businessId): bool {
+    if (!$u) return false;
+    if (is_admin($u)) return true;
+    $biz = my_business($u);
+    if ($biz && (int)$biz['id'] === $businessId) return true;
+    return (bool)val("SELECT COUNT(*) FROM inquiries WHERE customer_id = ? AND business_id = ?", [$u['id'], $businessId]);
 }
 
 // ---------- JSON API envelope (shared by the bearer-token /api and session-cookie /api/v1) ----------
@@ -311,7 +324,11 @@ function slugify(string $text, string $table, string $col = 'slug'): string {
     return $slug;
 }
 
-function upload_image(array $file, string $subdir): ?string {
+/** $private routes storage to PROTECTED_UPLOAD_DIR (blocked from direct web access by
+ * .htaccess) instead of the normal public UPLOAD_DIR — for verification documents and
+ * payment proofs, which must only ever be reachable through the authorized download
+ * endpoint in pages/download.php, never as a directly-guessable public URL. */
+function upload_image(array $file, string $subdir, bool $private = false): ?string {
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
     if (upload_rate_exceeded('image')) {
         flash('Too many upload attempts. Please wait a while before uploading more files.', 'error');
@@ -331,11 +348,12 @@ function upload_image(array $file, string $subdir): ?string {
         'image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif', default => null,
     };
     if (!$ext) { flash('Only JPG, PNG, WEBP or GIF images allowed.', 'error'); return null; }
-    $dir = UPLOAD_DIR . '/' . $subdir;
+    $base = $private ? PROTECTED_UPLOAD_DIR : UPLOAD_DIR;
+    $dir = $base . '/' . $subdir;
     if (!is_dir($dir)) mkdir($dir, 0775, true);
     $name = $subdir . '/' . bin2hex(random_bytes(10)) . '.' . $ext;
-    if (!move_uploaded_file($file['tmp_name'], UPLOAD_DIR . '/' . $name)) { flash('Could not save image.', 'error'); return null; }
-    image_optimize(UPLOAD_DIR . '/' . $name, $ext); // §22.3: downscale huge photos + write a thumbnail
+    if (!move_uploaded_file($file['tmp_name'], $base . '/' . $name)) { flash('Could not save image.', 'error'); return null; }
+    image_optimize($base . '/' . $name, $ext); // §22.3: downscale huge photos + write a thumbnail
     return $name;
 }
 
@@ -390,11 +408,16 @@ function img_url(?string $path): ?string { return $path ? UPLOAD_URL . '/' . $pa
  * callers only ever pass paths this app itself generated via upload_image(). */
 function purge_upload_file(?string $relPath): void {
     if (!$relPath) return;
-    $abs = UPLOAD_DIR . '/' . $relPath;
-    $real = realpath($abs);
-    if ($real === false || !str_starts_with($real, realpath(UPLOAD_DIR))) return;
-    @unlink($real);
-    @unlink($real . '.thumb.jpg');
+    // Verification documents/payment proofs now live under PROTECTED_UPLOAD_DIR, not the
+    // public UPLOAD_DIR — check both so this retention purge still finds them either way.
+    foreach ([UPLOAD_DIR, PROTECTED_UPLOAD_DIR] as $base) {
+        $real = realpath($base . '/' . $relPath);
+        if ($real !== false && str_starts_with($real, realpath($base))) {
+            @unlink($real);
+            @unlink($real . '.thumb.jpg');
+            return;
+        }
+    }
 }
 
 /** Thumbnail URL when one exists, else the full image. */
@@ -606,16 +629,39 @@ function listing_url(string $type, array $item): string {
 /** Primary image URL for a listing row, or null. */
 function listing_image(string $type, array $item): ?string {
     if ($type === 'product') {
-        $m = row("SELECT file_url FROM product_media WHERE product_id = ? ORDER BY is_primary DESC, sort_order ASC LIMIT 1", [$item['id']]);
+        // AR models share product_media with photos but cannot be rendered by <img>.
+        // Always select an actual image for cards/search/cart thumbnails.
+        $m = row("SELECT file_url FROM product_media WHERE product_id = ? AND media_type = 'image' ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1", [$item['id']]);
         return $m ? img_url($m['file_url']) : null;
     }
     return img_url($item['image'] ?? null);
 }
 
+function listing_badge(string $kind, string $label, ?string $icon = null): string {
+    $allowedKinds = ['featured', 'promoted', 'discount', 'condition', 'delivery', 'negotiable', 'verified',
+        'verified-phone_verified', 'verified-document_verified', 'verified-location_verified', 'verified-premium_verified'];
+    if (!in_array($kind, $allowedKinds, true)) $kind = 'condition';
+    $paths = [
+        'star' => 'm12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z',
+        'trend' => 'M5 17 11 11l4 4 5-7 M15 8h5v5',
+        'tag' => 'M3 5v6l10 10 8-8L11 3H5a2 2 0 0 0-2 2z M8 8h.01',
+        'box' => 'm4 7 8-4 8 4-8 4z M4 7v10l8 4 8-4V7 M12 11v10',
+        'truck' => 'M3 6h11v11H3z M14 10h4l3 3v4h-7z M7 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M18 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4',
+        'offer' => 'M12 3v18 M16 7.5C16 5.6 14.2 5 12 5s-4 .8-4 3 4 3 4 3 4 .8 4 3-1.8 3-4 3-4-.6-4-2.5',
+        'check' => 'M5 12.5 9.5 17 19 7',
+    ];
+    $iconHtml = isset($paths[$icon ?? ''])
+        ? '<svg class="badge-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="' . e($paths[$icon]) . '"></path></svg>'
+        : '';
+    $classes = 'badge badge-' . $kind . (str_starts_with($kind, 'verified-') ? ' badge-verified' : '');
+    return '<span class="' . e($classes) . '">' . $iconHtml . '<span>' . e($label) . '</span></span>';
+}
+
 function verified_badge(?string $status): string {
     if (!$status || $status === 'unverified') return '';
     $label = ['phone_verified' => 'Phone Verified', 'document_verified' => 'Verified', 'location_verified' => 'Verified', 'premium_verified' => 'Premium Verified'][$status] ?? 'Verified';
-    return '<span class="badge badge-verified" title="' . e($label) . '">✔ ' . e($label) . '</span>';
+    $level = in_array($status, ['phone_verified', 'document_verified', 'location_verified', 'premium_verified'], true) ? $status : 'document_verified';
+    return '<span title="' . e($label) . '">' . listing_badge('verified-' . $level, $label, 'check') . '</span>';
 }
 
 /** Seller response rate (§23.1): share of inquiries the vendor acted on. Null until 3+ inquiries. */
@@ -1025,9 +1071,39 @@ function system_ui_section_enabled(string $section): bool {
     return !in_array($section, $ui['hidden_sections'] ?? [], true);
 }
 
-function system_ui_style_tag(): string {
+// Single source of truth for the runtime design tokens the System UI Optimizer controls.
+// Consumed by system_ui_style_tag() for PHP pages and exposed through /api/v1/me shell
+// state so the React SPA re-themes from the same admin settings instead of a drifting
+// hardcoded copy in frontend/src/index.css.
+function system_ui_css_vars(): array {
     $ui = system_ui_config();
     $shadow = (int)$ui['shadow_strength'];
+    $fontStack = [
+        'inter' => "Inter,'Segoe UI',system-ui,-apple-system,sans-serif",
+        'system' => "system-ui,-apple-system,'Segoe UI',sans-serif",
+        'serif' => "Georgia,'Times New Roman',serif",
+        'rounded' => "'Segoe UI Rounded','Arial Rounded MT Bold',Inter,system-ui,sans-serif",
+    ][$ui['font_family']] ?? "Inter,'Segoe UI',system-ui,-apple-system,sans-serif";
+    return [
+        '--brand' => $ui['brand'],
+        '--brand-dark' => $ui['brand_dark'],
+        '--brand-soft' => $ui['brand_soft'],
+        '--accent' => $ui['accent'],
+        '--accent-soft' => $ui['accent_soft'],
+        '--ink' => $ui['ink'],
+        '--text' => $ui['text'],
+        '--bg' => $ui['bg'],
+        '--surface' => $ui['surface'],
+        '--r' => (int)$ui['card_radius'] . 'px',
+        '--r-sm' => max(6, (int)$ui['panel_radius'] - 4) . 'px',
+        '--shadow-sm' => '0 8px 20px -16px rgba(16,24,40,.' . min(90, $shadow) . ')',
+        '--shadow' => '0 18px 42px -28px rgba(16,24,40,.' . min(90, $shadow + 8) . ')',
+        '--font-ui' => $fontStack,
+    ];
+}
+
+function system_ui_style_tag(): string {
+    $ui = system_ui_config();
     $density = ['compact' => 34, 'comfortable' => 40, 'spacious' => 46][$ui['component_density']] ?? 40;
     $heroImage = trim((string)$ui['hero_image']);
     $overlay = max(0.2, min(0.92, ((int)$ui['hero_overlay']) / 100));
@@ -1044,20 +1120,10 @@ function system_ui_style_tag(): string {
             $heroBackground = "linear-gradient(115deg,rgba(2,6,23,{$overlay}),rgba(29,78,216," . max(0.2, $overlay - 0.16) . ")),url(\"" . e($safeHero) . "\") {$heroPosition}/cover no-repeat";
         }
     }
-    $fontStack = [
-        'inter' => "Inter,'Segoe UI',system-ui,-apple-system,sans-serif",
-        'system' => "system-ui,-apple-system,'Segoe UI',sans-serif",
-        'serif' => "Georgia,'Times New Roman',serif",
-        'rounded' => "'Segoe UI Rounded','Arial Rounded MT Bold',Inter,system-ui,sans-serif",
-    ][$ui['font_family']] ?? "Inter,'Segoe UI',system-ui,-apple-system,sans-serif";
-    $css = ":root{"
-        . "--brand:{$ui['brand']};--brand-dark:{$ui['brand_dark']};--brand-soft:{$ui['brand_soft']};"
-        . "--accent:{$ui['accent']};--accent-soft:{$ui['accent_soft']};--ink:{$ui['ink']};--text:{$ui['text']};"
-        . "--bg:{$ui['bg']};--surface:{$ui['surface']};--r:" . (int)$ui['card_radius'] . "px;--r-sm:" . max(6, (int)$ui['panel_radius'] - 4) . "px;"
-        . "--shadow-sm:0 8px 20px -16px rgba(16,24,40,." . min(90, $shadow) . ");"
-        . "--shadow:0 18px 42px -28px rgba(16,24,40,." . min(90, $shadow + 8) . ");"
-        . "}"
-        . "body{font-family:{$fontStack};font-size:" . ((int)$ui['font_scale'] / 100 * 15.5) . "px}.container{max-width:" . (int)$ui['container_width'] . "px}.section{padding-top:" . (int)$ui['section_spacing'] . "px;padding-bottom:" . (int)$ui['section_spacing'] . "px}.grid{grid-template-columns:repeat(auto-fill,minmax(" . (int)$ui['grid_min_width'] . "px,1fr))}"
+    $rootVars = '';
+    foreach (system_ui_css_vars() as $var => $value) $rootVars .= "$var:$value;";
+    $css = ":root{" . $rootVars . "}"
+        . "body{font-family:var(--font-ui);font-size:" . ((int)$ui['font_scale'] / 100 * 15.5) . "px}.container{max-width:" . (int)$ui['container_width'] . "px}.section{padding-top:" . (int)$ui['section_spacing'] . "px;padding-bottom:" . (int)$ui['section_spacing'] . "px}.grid{grid-template-columns:repeat(auto-fill,minmax(" . (int)$ui['grid_min_width'] . "px,1fr))}"
         . ".card,.filters,.panel,.dash-nav,.table-wrap,.cat-tile,input,select,textarea{border-width:" . (int)$ui['border_width'] . "px}"
         . ".btn,.header-search input,.header-search button{min-height:{$density}px}.btn,.header-search button,.hero-search .btn{border-radius:" . (int)$ui['button_radius'] . "px}"
         . "input,select,textarea{border-radius:" . (int)$ui['input_radius'] . "px}"
@@ -1270,10 +1336,90 @@ function cart_resolve(): array {
 function cart_count(): int { return count(cart()); }
 
 // ---------- subscriptions & limits ----------
+/** Drop the premium_verified badge back to the business's earned level when no active premium
+ * listing plan (and no independently-approved premium verification request) still backs it.
+ * Shared by the nightly expiry cron and activate_subscription() so a superseding downgrade can
+ * never strand a premium badge the vendor no longer pays for. No-op unless a revert is due. */
+function revert_premium_badge_if_unbacked(int $businessId): void {
+    $biz = row("SELECT verification_status FROM businesses WHERE id = ?", [$businessId]);
+    if (!$biz || $biz['verification_status'] !== 'premium_verified') return;
+    // An active premium listing plan still backs the badge — leave it.
+    if (current_plan($businessId) === 'premium') return;
+    // Earned independently through an approved premium verification request — never revoke.
+    if (val("SELECT COUNT(*) FROM verification_requests
+             WHERE business_id = ? AND status = 'approved' AND requested_level = 'premium_verified'", [$businessId])) return;
+    $fallback = val("SELECT requested_level FROM verification_requests
+        WHERE business_id = ? AND status = 'approved'
+        ORDER BY FIELD(requested_level, 'phone_verified','location_verified','document_verified') DESC, id DESC LIMIT 1",
+        [$businessId]) ?: 'unverified';
+    q("UPDATE businesses SET verification_status = ? WHERE id = ?", [$fallback, $businessId]);
+}
+
+/** Activate a paid subscription on admin payment-confirm. Guarantees at most one active
+ * subscription per (business, type) and, on renewal, extends from the current still-future
+ * expiry rather than NOW() so time the vendor already paid for is never thrown away. */
+function activate_subscription(array $sub): void {
+    $bizId  = (int)$sub['business_id'];
+    $type   = in_array($sub['type'] ?? 'listing_plan', ['listing_plan', 'boost'], true) ? $sub['type'] : 'listing_plan';
+    $months = max(1, min(12, (int)$sub['months']));
+    // Renewal extension: start from the latest still-future expiry of an existing active
+    // same-type subscription; otherwise from now.
+    $existingEnd = val("SELECT MAX(ends_at) FROM subscriptions
+        WHERE business_id = ? AND type = ? AND status = 'active' AND id <> ?
+          AND ends_at IS NOT NULL AND ends_at > NOW()", [$bizId, $type, (int)$sub['id']]);
+    $base = $existingEnd ?: date('Y-m-d H:i:s');
+    // Only one active subscription of a given type should ever exist — retire the rest.
+    q("UPDATE subscriptions SET status = 'superseded'
+       WHERE business_id = ? AND type = ? AND status = 'active' AND id <> ?", [$bizId, $type, (int)$sub['id']]);
+    // $months is an int (cast + clamped above), safe to inline — INTERVAL takes no placeholder.
+    q("UPDATE subscriptions SET status = 'active', starts_at = NOW(), ends_at = DATE_ADD(?, INTERVAL " . $months . " MONTH)
+       WHERE id = ?", [$base, (int)$sub['id']]);
+    // Premium listing plan grants the premium_verified badge; a non-premium activation that
+    // superseded a premium plan must not leave the badge stranded.
+    if ($type === 'listing_plan') {
+        if (($sub['plan'] ?? '') === 'premium') {
+            q("UPDATE businesses SET verification_status = 'premium_verified' WHERE id = ?", [$bizId]);
+        } else {
+            revert_premium_badge_if_unbacked($bizId);
+        }
+    }
+}
+
 function current_plan(int $businessId): string {
-    $sub = row("SELECT plan FROM subscriptions WHERE business_id = ? AND status = 'active'
+    // Scoped to type='listing_plan' — subscriptions also carries Boost tier purchases in the
+    // same table/plan column (type='boost'), which must never be read as a listing-quota plan.
+    $sub = row("SELECT plan FROM subscriptions WHERE business_id = ? AND type = 'listing_plan' AND status = 'active'
                 AND (ends_at IS NULL OR ends_at > NOW()) ORDER BY ends_at DESC LIMIT 1", [$businessId]);
     return $sub['plan'] ?? 'free';
+}
+
+/** Active Boost tier key (see BOOST_TIERS), or null if the business has none active. */
+function current_boost(int $businessId): ?string {
+    $sub = row("SELECT plan FROM subscriptions WHERE business_id = ? AND type = 'boost' AND status = 'active'
+                AND (ends_at IS NULL OR ends_at > NOW()) ORDER BY ends_at DESC LIMIT 1", [$businessId]);
+    return $sub['plan'] ?? null;
+}
+
+function boost_rank_weight(?string $tier): int {
+    $tiers = boost_tiers();
+    return isset($tier, $tiers[$tier]) ? (int)$tiers[$tier]['rank_weight'] : 0;
+}
+
+/** SQL expression returning the active Boost rank weight for a business id expression. */
+function boost_rank_sql(string $businessIdExpr = 'b.id'): string {
+    $cases = [];
+    foreach (boost_tiers() as $key => $tier) {
+        $cases[] = "WHEN " . db()->quote($key) . " THEN " . (int)$tier['rank_weight'];
+    }
+    return "(CASE (
+        SELECT s.plan FROM subscriptions s
+        WHERE s.business_id = {$businessIdExpr}
+          AND s.type = 'boost'
+          AND s.status = 'active'
+          AND (s.ends_at IS NULL OR s.ends_at > NOW())
+        ORDER BY s.ends_at DESC
+        LIMIT 1
+    ) " . implode(' ', $cases) . " ELSE 0 END)";
 }
 
 function listing_count(int $businessId): int {
@@ -1293,6 +1439,28 @@ function can_add_video(int $businessId): bool {
     $limit = plans()[current_plan($businessId)]['videos'];
     if ($limit < 0) return true;
     return (int)val("SELECT COUNT(*) FROM video_posts WHERE business_id = ? AND status NOT IN ('deleted','rejected')", [$businessId]) < $limit;
+}
+
+// ---------- moderation reports ----------
+function report_allowed_types(): array {
+    return ['product', 'service', 'supply', 'business', 'video', 'review', 'user'];
+}
+
+/** Create a moderation report from either a public PHP form or the React session API. */
+function create_report(?int $reporterId, string $type, int $reportedId, string $reason, string $description = ''): array {
+    $type = trim($type);
+    $reason = trim($reason);
+    $description = trim($description);
+
+    if (!in_array($type, report_allowed_types(), true) || $reportedId <= 0 || $reason === '') {
+        return [null, ['Report could not be submitted.']];
+    }
+
+    q("INSERT INTO reports (reporter_id, reported_type, reported_id, reason, description) VALUES (?,?,?,?,?)",
+      [$reporterId, $type, $reportedId, $reason, $description ?: null]);
+    if ($type === 'video') q("UPDATE video_posts SET reports_count = reports_count + 1 WHERE id = ?", [$reportedId]);
+
+    return [row("SELECT * FROM reports WHERE id = ?", [db()->lastInsertId()]), []];
 }
 
 // ---------- promotions ----------
@@ -1324,8 +1492,15 @@ function promotion_target_ready(array $p): bool {
 function promotion_activate(array $p, ?string $startsAt = null): bool {
     if (!promotion_target_ready($p)) return false;
     $startsAt = $startsAt ?: date('Y-m-d H:i:s');
-    q("UPDATE promotions SET status = 'active', starts_at = ?, ends_at = DATE_ADD(?, INTERVAL duration_weeks WEEK) WHERE id = ?",
-      [$startsAt, $startsAt, $p['id']]);
+    // duration_days (TOP Pin's 7/30-day flat packages) takes precedence over duration_weeks
+    // when set — duration_weeks alone can't express a 30-day period without rounding.
+    if (!empty($p['duration_days'])) {
+        q("UPDATE promotions SET status = 'active', starts_at = ?, ends_at = DATE_ADD(?, INTERVAL duration_days DAY) WHERE id = ?",
+          [$startsAt, $startsAt, $p['id']]);
+    } else {
+        q("UPDATE promotions SET status = 'active', starts_at = ?, ends_at = DATE_ADD(?, INTERVAL duration_weeks WEEK) WHERE id = ?",
+          [$startsAt, $startsAt, $p['id']]);
+    }
     $fresh = row("SELECT * FROM promotions WHERE id = ?", [$p['id']]);
     if ($fresh) promotion_apply($fresh, true);
     return true;

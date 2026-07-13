@@ -103,14 +103,15 @@ if ($minPrice > 0) { $where[] = "$priceCol >= ?"; $params[] = $minPrice; }
 if ($maxPrice > 0) { $where[] = "$priceCol <= ?"; $params[] = $maxPrice; }
 
 $orderParams = [];
+$boostRank = boost_rank_sql('b.id');
 if ($sort === 'nearest') {
     // No universal lat/lng on listings yet, so "nearest" ranks same-neighborhood, then same-city, then freshness.
     if ($loc['subcity']) {
-        $order = "(l.subcity = ?) DESC, (l.city = ?) DESC, l.is_featured DESC, l.created_at DESC";
+        $order = "(l.subcity = ?) DESC, (l.city = ?) DESC, $boostRank DESC, l.is_featured DESC, l.created_at DESC";
         $orderParams[] = $loc['subcity'];
         $orderParams[] = $loc['city'];
     } else {
-        $order = "(l.city = ?) DESC, l.is_featured DESC, l.created_at DESC";
+        $order = "(l.city = ?) DESC, $boostRank DESC, l.is_featured DESC, l.created_at DESC";
         $orderParams[] = $loc['city'];
     }
 } elseif ($sort === 'recommended') {
@@ -121,6 +122,7 @@ if ($sort === 'nearest') {
         . " + (b.verification_status != 'unverified') * {$W('verification')}"
         . " + LEAST(10, b.rating_average * {$W('rating')})"
         . " + GREATEST(0, {$W('freshness')} - DATEDIFF(NOW(), l.created_at) / 5)"
+        . " + $boostRank * {$W('promoted')}"
         . " + l.is_featured * {$W('featured')} + l.is_promoted * {$W('promoted')}"
         . " - (SELECT COUNT(*) FROM reports r WHERE r.reported_type = '$type' AND r.reported_id = l.id AND r.status IN ('open','reviewing')) * {$W('report_penalty')}"
         . ") DESC, l.created_at DESC";
@@ -134,8 +136,8 @@ if ($sort === 'nearest') {
         'most_viewed'    => "l.views_count DESC",
         'top_rated'      => "b.rating_average DESC, b.rating_count DESC",
         'most_inquired'  => "l.inquiries_count DESC",
-        'discount_first' => ($type === 'product' ? "(l.discount_price > 0) DESC, " : '') . "l.is_featured DESC, l.created_at DESC",
-        default          => "l.is_featured DESC, l.is_promoted DESC, l.created_at DESC",
+        'discount_first' => ($type === 'product' ? "(l.discount_price > 0) DESC, " : '') . "$boostRank DESC, l.is_featured DESC, l.created_at DESC",
+        default          => "$boostRank DESC, l.is_featured DESC, l.is_promoted DESC, l.created_at DESC",
     };
 }
 

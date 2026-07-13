@@ -20,6 +20,7 @@ require __DIR__ . '/app/db.php';
 require __DIR__ . '/app/cache.php';
 require __DIR__ . '/app/helpers.php';
 require __DIR__ . '/app/settings.php';
+require __DIR__ . '/app/remembered_login.php';
 require __DIR__ . '/app/notify.php';
 require __DIR__ . '/app/ads.php';
 require __DIR__ . '/app/attributes.php';
@@ -41,6 +42,31 @@ if (str_starts_with($path, BASE_URL)) $path = substr($path, strlen(BASE_URL));
 $path = trim($path, '/');
 $seg = $path === '' ? [] : explode('/', $path);
 $P = __DIR__ . '/pages/';
+
+// React authenticated app fallback. Apache/Yegara normally handles this through
+// .htaccess, but the PHP built-in server and some local proxy setups route
+// /app/* into index.php instead. Serve the built Vite shell here too so direct
+// refreshes like /app/vendor do not fall through to the public PHP 404 page.
+if (($seg[0] ?? '') === 'app') {
+    if (($seg[1] ?? '') === 'assets') {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Asset not found.';
+        exit;
+    }
+    $spa = __DIR__ . '/app/index.html';
+    if (is_file($spa)) {
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+        readfile($spa);
+    } else {
+        http_response_code(503);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "React app build is missing. Run `npm run build` in frontend/ and copy frontend/dist/* into app/.";
+    }
+    exit;
+}
+
 user_location(); // warm session/cookie for this request so every page can read it cheaply
 
 // maintenance mode (admin → Settings → General): admins may still log in and work
@@ -71,6 +97,39 @@ foreach ($featureRoutes as $feature => $matches) {
         if ($feature === 'api') { header('Content-Type: application/json'); http_response_code(503); exit('{"ok":false,"error":"API disabled by administrator."}'); }
         flash('This feature is currently disabled.', 'error');
         redirect('');
+    }
+}
+
+// Compatibility redirects for authenticated workflows that have accepted React
+// replacements. Keep these GET-only so stale POST submissions from old tabs do
+// not silently turn into navigation and lose intent.
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $reactRedirects = [
+        'cart' => 'app/cart',
+        'checkout' => 'app/checkout',
+        'account' => 'app/account',
+        'account/orders' => 'app/account/orders',
+        'account/settings' => 'app/account/settings',
+        'notifications' => 'app/account/notifications',
+        'vendor' => 'app/vendor',
+        'vendor/business' => 'app/vendor/business',
+        'vendor/videos' => 'app/vendor/videos',
+        'vendor/verification' => 'app/vendor/verification',
+        'vendor/reviews' => 'app/vendor/reviews',
+        'vendor/inquiries' => 'app/vendor/inquiries',
+        'vendor/orders' => 'app/vendor/orders',
+        'vendor/promotions' => 'app/vendor/boost',
+        'vendor/subscription' => 'app/vendor/boost',
+        'vendor/analytics' => 'app/vendor/analytics',
+    ];
+    if (isset($reactRedirects[$path])) redirect($reactRedirects[$path]);
+    if (($seg[0] ?? '') === 'vendor' && ($seg[1] ?? '') === 'listings') {
+        $ltype = isset(LISTING_TABLES[$seg[2] ?? '']) ? $seg[2] : 'product';
+        $action = $seg[3] ?? '';
+        $lid = ctype_digit($seg[4] ?? '') ? (int)$seg[4] : 0;
+        if ($action === 'new') redirect("app/vendor/listings/$ltype/new");
+        if ($action === 'edit' && $lid !== 0) redirect("app/vendor/listings/$ltype/$lid/edit");
+        redirect("app/vendor/listings/$ltype");
     }
 }
 
@@ -115,6 +174,8 @@ match (true) {
 
     // inquiry threads + notifications + search + content pages
     $seg[0] === 'inquiries' && count($seg) === 2 => call($P, 'inquiry_view.php', ['id' => (int)$seg[1]]),
+    $seg[0] === 'download' && count($seg) === 3 && in_array($seg[1], ['verification', 'payment'], true)
+        => call($P, 'download.php', ['kind' => $seg[1], 'id' => (int)$seg[2]]),
     $path === 'notifications' => require $P . 'notifications.php',
     $path === 'search'        => require $P . 'search.php',
     $seg[0] === 'page' && count($seg) === 2 => call($P, 'page.php', ['slug' => $seg[1]]),

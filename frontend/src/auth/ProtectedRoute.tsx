@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { useSession } from './SessionContext';
+import { useSession } from './session';
+import { loginUrlForPath } from './redirect';
 
 /**
  * Guards a route behind an authenticated session with an allowed account_type. This is a UX
@@ -19,9 +20,15 @@ export function ProtectedRoute({ children, roles }: { children: ReactNode; roles
   }
 
   if (!authenticated) {
-    const returnTo = encodeURIComponent(window.location.pathname);
-    window.location.href = `/login?return=${returnTo}`;
-    return null;
+    const loginUrl = loginUrlForPath(window.location.pathname);
+    if (!import.meta.env.TEST) window.location.href = loginUrl;
+    return (
+      <div className="container section">
+        <p className="muted">
+          Redirecting to login… <a href={loginUrl}>Log in</a>
+        </p>
+      </div>
+    );
   }
 
   if (roles && user && !roles.includes(user.account_type)) {

@@ -20,7 +20,8 @@ $products = rows(
     "SELECT 'product' AS type, p.title AS title, p.slug AS slug,
             b.business_name AS biz,
             (SELECT file_url FROM product_media
-             WHERE product_id = p.id ORDER BY is_primary DESC LIMIT 1) AS img
+             WHERE product_id = p.id AND media_type = 'image'
+             ORDER BY is_primary DESC, sort_order, id LIMIT 1) AS img
      FROM products p
      JOIN businesses b ON b.id = p.business_id
      WHERE p.status = 'active' AND b.status = 'active'

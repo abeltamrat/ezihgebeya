@@ -13,6 +13,7 @@ $results = ['product' => [], 'service' => [], 'supply' => []];
 $businesses = $videos = $cats = [];
 
 if ($qStr !== '') {
+    $boostRank = boost_rank_sql('b.id');
     foreach (LISTING_TABLES as $t => $table) {
         $col = listing_title_col($t);
         [$likeCol, $likeColParams] = search_like_clause("l.`$col`", $searchTerms);
@@ -20,7 +21,7 @@ if ($qStr !== '') {
             FROM `$table` l JOIN businesses b ON b.id = l.business_id JOIN categories c ON c.id = l.category_id
             WHERE l.status = 'active' AND b.status = 'active'
               AND (MATCH(l.`$col`, l.description) AGAINST (?) OR $likeCol)
-            ORDER BY MATCH(l.`$col`, l.description) AGAINST (?) DESC, l.is_featured DESC LIMIT 8",
+            ORDER BY MATCH(l.`$col`, l.description) AGAINST (?) DESC, $boostRank DESC, l.is_featured DESC LIMIT 8",
             [$matchString, ...$likeColParams, $matchString]);
     }
     [$likeName, $likeNameParams] = search_like_clause('business_name', $searchTerms);

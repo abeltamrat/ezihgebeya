@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $ref = trim($_POST['reference_number'] ?? '');
         $methods = payment_methods(false);
         $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
-        $proof = upload_image($_FILES['proof_image'] ?? [], 'payments');
+        $proof = upload_image($_FILES['proof_image'] ?? [], 'payments', true);
         // Server-side duplicate guard: the "pay" button is only hidden client-side once a
         // pending/confirmed payment exists, which a second direct POST bypasses entirely —
         // verified this let two full-amount payments land against one order, double-counting

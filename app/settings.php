@@ -81,6 +81,15 @@ function system_settings_defaults(): array {
             'sms_mirror' => 1,        // mirror high-value notifications to SMS
             'sms_gateway_url' => '',  // e.g. https://sms.example/send?to={phone}&text={message}&token=SECRET
             'email_from' => 'no-reply@ezihgebeya.local',
+            // Firebase Cloud Messaging web push (blank = disabled, logs to outbox.log only,
+            // same graceful-degrade pattern as sms_gateway_url above). fcm_web_config is the
+            // public client-side Firebase config object (safe to expose — Firebase's own web
+            // config is designed to be public); fcm_service_account_json is the server-side
+            // service-account credential used to mint OAuth2 tokens for the FCM v1 send API
+            // and must never be exposed to the browser.
+            'fcm_project_id' => '',
+            'fcm_web_config' => '',           // JSON: {apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId, vapidKey}
+            'fcm_service_account_json' => '', // JSON service-account key downloaded from Firebase console
         ],
         'seo' => [
             'meta_description' => SITE_TAGLINE,
@@ -128,6 +137,24 @@ function plans(): array {
 function promo_types(): array {
     $out = PROMO_TYPES;
     foreach ((array)sys('promos', []) as $k => $p) {
+        if (isset($out[$k])) $out[$k]['price'] = max(0, (float)($p['price'] ?? $out[$k]['price']));
+    }
+    return $out;
+}
+
+/** TOP_PIN_PACKAGES with admin price overrides (labels/durations stay from config). */
+function top_pin_packages(): array {
+    $out = TOP_PIN_PACKAGES;
+    foreach ((array)sys('top_pin', []) as $k => $p) {
+        if (isset($out[$k])) $out[$k]['price'] = max(0, (float)($p['price'] ?? $out[$k]['price']));
+    }
+    return $out;
+}
+
+/** BOOST_TIERS with admin price overrides (labels/benefits stay from config). */
+function boost_tiers(): array {
+    $out = BOOST_TIERS;
+    foreach ((array)sys('boost', []) as $k => $p) {
         if (isset($out[$k])) $out[$k]['price'] = max(0, (float)($p['price'] ?? $out[$k]['price']));
     }
     return $out;
@@ -221,6 +248,9 @@ function sanitize_system_settings(array $in): array {
         'sms_mirror' => !empty($n['sms_mirror']) ? 1 : 0,
         'sms_gateway_url' => mb_substr(trim($n['sms_gateway_url'] ?? ''), 0, 500),
         'email_from' => mb_substr(trim($n['email_from'] ?? '') ?: $d['notifications']['email_from'], 0, 150),
+        'fcm_project_id' => mb_substr(trim($n['fcm_project_id'] ?? ''), 0, 150),
+        'fcm_web_config' => mb_substr(trim($n['fcm_web_config'] ?? ''), 0, 2000),
+        'fcm_service_account_json' => mb_substr(trim($n['fcm_service_account_json'] ?? ''), 0, 8000),
     ];
 
     $s = $in['seo'] ?? [];

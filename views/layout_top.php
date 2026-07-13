@@ -24,7 +24,7 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
 <meta name="description" content="<?= e($pageDesc ?? sys('seo.meta_description', SITE_TAGLINE)) ?>">
 <?php if (!empty($robots)): ?><meta name="robots" content="<?= e($robots) ?>"><?php endif; ?>
 <link rel="manifest" href="<?= url('manifest.webmanifest') ?>">
-<meta name="theme-color" content="#2454d6">
+<meta name="theme-color" content="<?= e(system_ui_config()['brand']) ?>">
 <link rel="icon" href="<?= url('assets/icons/icon-192.png') ?>">
 <link rel="apple-touch-icon" href="<?= url('assets/icons/icon-192.png') ?>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -122,7 +122,7 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
       <?php if (!$u): ?>
         <a href="<?= url('login') ?>">Login</a>
       <?php else: ?>
-        <?php $dashUrl = is_admin($u) ? 'admin' : (is_vendor($u) ? 'app/vendor' : 'account'); ?>
+        <?php $dashUrl = default_post_login_path($u); ?>
         <a href="<?= url($sellUrl) ?>" class="btn btn-primary btn-sm nav-sell-btn"><?= system_ui_icon('shop', 'Sell') ?> <?= e($sellLabel) ?><?= system_ui_button_badge('join') ?></a>
         <div class="dropdown dropdown-end">
           <div tabindex="0" role="button" class="btn btn-ghost btn-sm gap-2 px-2">

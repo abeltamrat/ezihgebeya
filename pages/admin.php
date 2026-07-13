@@ -27,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($do === 'biz_status' && in_array($_POST['status'], ['active', 'rejected', 'suspended', 'pending'], true)) {
         q("UPDATE businesses SET status = ? WHERE id = ?", [$_POST['status'], $id]);
         if ($_POST['status'] === 'active') notify_business($id, 'verification_approved', 'Your business was approved — start listing!', 'vendor', '', true);
-        if ($_POST['status'] === 'rejected') notify_business($id, 'verification_rejected', 'Your business registration was rejected', 'vendor/business');
+        if ($_POST['status'] === 'rejected') notify_business($id, 'verification_rejected', 'Your business registration was rejected', 'app/vendor/business');
         flash('Business updated.');
     } elseif ($do === 'biz_verify' && in_array($_POST['verification_status'], ['unverified', 'phone_verified', 'document_verified', 'location_verified', 'premium_verified'], true)) {
         $newLevel = $_POST['verification_status'];
@@ -163,6 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($_POST['status'] === 'active') {
                 lift_account_sanctions($id, (int)$u['id'], trim($_POST['appeal_response'] ?? ''));
             } else {
+                remembered_login_revoke_user($id);
                 create_account_sanction($id, (int)$u['id'], $_POST['status'], trim($_POST['sanction_reason'] ?? 'policy_violation'), trim($_POST['admin_note'] ?? ''));
                 notify($id, 'account_sanction', 'Your account was ' . $_POST['status'] . '. You can appeal this decision.', 'appeal', trim($_POST['admin_note'] ?? ''), true);
             }
@@ -206,8 +207,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif ($p['subscription_id']) {
                     $sub = row("SELECT * FROM subscriptions WHERE id = ?", [$p['subscription_id']]);
                     if ($sub && $sub['status'] === 'pending') {
-                        q("UPDATE subscriptions SET status = 'active', starts_at = NOW(), ends_at = NOW() + INTERVAL months MONTH WHERE id = ?", [$sub['id']]);
-                        if ($sub['plan'] === 'premium') q("UPDATE businesses SET verification_status = 'premium_verified' WHERE id = ?", [$sub['business_id']]);
+                        // Supersedes any prior active same-type plan and extends renewals from the
+                        // current expiry (see activate_subscription()); replaces the old inline UPDATE
+                        // that reset ends_at to NOW()+months and left stacked active rows behind.
+                        activate_subscription($sub);
                     }
                 }
                 notify((int)$p['payer_id'], 'payment_received', 'Your payment of ' . money($p['amount']) . ' was confirmed', $p['order_id'] ? 'account/orders' : 'vendor', '', true);
@@ -394,19 +397,24 @@ include __DIR__ . '/../views/layout_top.php';
     </div>
     <h3>Admin</h3>
     <?php
-    $pendCounts = [
-        'businesses' => val("SELECT COUNT(*) FROM businesses WHERE status='pending'"),
-        'verification' => val("SELECT COUNT(*) FROM verification_requests WHERE status='pending'"),
-        'products' => val("SELECT COUNT(*) FROM products WHERE status='pending_review'"),
-        'services' => val("SELECT COUNT(*) FROM services WHERE status='pending_review'"),
-        'supplies' => val("SELECT COUNT(*) FROM supplies WHERE status='pending_review'"),
-        'videos' => val("SELECT COUNT(*) FROM video_posts WHERE status='pending'"),
-        'reviews' => val("SELECT COUNT(*) FROM reviews WHERE status='pending'"),
-        'reports' => val("SELECT COUNT(*) FROM reports WHERE status='open'"),
-        'support' => db_table_exists('support_tickets') ? val("SELECT COUNT(*) FROM support_tickets WHERE status IN ('open','waiting_user')") : 0,
-        'orders' => val("SELECT COUNT(*) FROM orders WHERE status='pending'"),
-        'payments' => val("SELECT COUNT(*) FROM payments WHERE status='pending'"),
-    ];
+    // Cached rather than a nightly-cron precompute (unlike the suspicious-activity trend
+    // below): these drive the moderation-queue sidebar an admin acts on the same day, so a
+    // 24h-stale cron result would hide same-day pending items. A short TTL still moves the
+    // 11 COUNT(*) queries off nearly every admin page load (they'd otherwise re-run on every
+    // section view) while staying fresh enough for real moderation work.
+    $pendCounts = cache_remember('admin_pending_counts', 120, fn() => [
+        'businesses' => (int)val("SELECT COUNT(*) FROM businesses WHERE status='pending'"),
+        'verification' => (int)val("SELECT COUNT(*) FROM verification_requests WHERE status='pending'"),
+        'products' => (int)val("SELECT COUNT(*) FROM products WHERE status='pending_review'"),
+        'services' => (int)val("SELECT COUNT(*) FROM services WHERE status='pending_review'"),
+        'supplies' => (int)val("SELECT COUNT(*) FROM supplies WHERE status='pending_review'"),
+        'videos' => (int)val("SELECT COUNT(*) FROM video_posts WHERE status='pending'"),
+        'reviews' => (int)val("SELECT COUNT(*) FROM reviews WHERE status='pending'"),
+        'reports' => (int)val("SELECT COUNT(*) FROM reports WHERE status='open'"),
+        'support' => db_table_exists('support_tickets') ? (int)val("SELECT COUNT(*) FROM support_tickets WHERE status IN ('open','waiting_user')") : 0,
+        'orders' => (int)val("SELECT COUNT(*) FROM orders WHERE status='pending'"),
+        'payments' => (int)val("SELECT COUNT(*) FROM payments WHERE status='pending'"),
+    ]);
     foreach ($sections as $k => $label): $n = $pendCounts[$k] ?? 0; ?>
       <a href="<?= url('admin/' . $k) ?>" class="<?= $k === $section ? 'current' : '' ?>"><?= $label ?><?= $n ? " <span class='pill'>$n</span>" : '' ?></a>
     <?php endforeach; ?>
@@ -415,19 +423,29 @@ include __DIR__ . '/../views/layout_top.php';
   <div class="dash-main">
   <?php if ($section === 'dashboard'): ?>
     <h1>Admin Dashboard</h1>
+    <?php $dashCounters = cache_remember('admin_dashboard_counters', 300, fn() => [
+        'total_users' => (int)val("SELECT COUNT(*) FROM users"),
+        'active_businesses' => (int)val("SELECT COUNT(*) FROM businesses WHERE status='active'"),
+        'active_listings' => (int)val("SELECT (SELECT COUNT(*) FROM products WHERE status='active') + (SELECT COUNT(*) FROM services WHERE status='active') + (SELECT COUNT(*) FROM supplies WHERE status='active')"),
+        'total_inquiries' => (int)val("SELECT COUNT(*) FROM inquiries"),
+        'inquiries_7d' => (int)val("SELECT COUNT(*) FROM inquiries WHERE created_at > NOW() - INTERVAL 7 DAY"),
+        'approved_videos' => (int)val("SELECT COUNT(*) FROM video_posts WHERE status='approved'"),
+        'video_views' => (int)val("SELECT COALESCE(SUM(views_count),0) FROM video_posts"),
+        'cta_clicks' => (int)val("SELECT COALESCE(SUM(cta_clicks_count),0) FROM video_posts"),
+    ]); ?>
     <?php $cards = [
-        'Total users' => val("SELECT COUNT(*) FROM users"),
-        'Businesses' => val("SELECT COUNT(*) FROM businesses WHERE status='active'"),
+        'Total users' => $dashCounters['total_users'],
+        'Businesses' => $dashCounters['active_businesses'],
         'Pending businesses' => $pendCounts['businesses'],
-        'Active listings' => val("SELECT (SELECT COUNT(*) FROM products WHERE status='active') + (SELECT COUNT(*) FROM services WHERE status='active') + (SELECT COUNT(*) FROM supplies WHERE status='active')"),
+        'Active listings' => $dashCounters['active_listings'],
         'Pending listings' => $pendCounts['products'] + $pendCounts['services'] + $pendCounts['supplies'],
         'Pending videos' => $pendCounts['videos'],
         'Open reports' => $pendCounts['reports'],
-        'Total inquiries' => val("SELECT COUNT(*) FROM inquiries"),
-        'Inquiries (7 days)' => val("SELECT COUNT(*) FROM inquiries WHERE created_at > NOW() - INTERVAL 7 DAY"),
-        'Approved videos' => val("SELECT COUNT(*) FROM video_posts WHERE status='approved'"),
-        'Video views' => val("SELECT COALESCE(SUM(views_count),0) FROM video_posts"),
-        'CTA clicks' => val("SELECT COALESCE(SUM(cta_clicks_count),0) FROM video_posts"),
+        'Total inquiries' => $dashCounters['total_inquiries'],
+        'Inquiries (7 days)' => $dashCounters['inquiries_7d'],
+        'Approved videos' => $dashCounters['approved_videos'],
+        'Video views' => $dashCounters['video_views'],
+        'CTA clicks' => $dashCounters['cta_clicks'],
     ]; ?>
     <div class="stat-grid">
       <?php foreach ($cards as $label => $n): ?>
@@ -725,7 +743,7 @@ include __DIR__ . '/../views/layout_top.php';
         </td>
         <td><strong><?= money($p['amount']) ?></strong></td>
         <td class="small"><?= e(str_replace('_', ' ', $p['payment_method'])) ?><br><?= e($p['reference_number'] ?: '—') ?></td>
-        <td><?php if ($p['proof_image']): ?><a href="<?= e(img_url($p['proof_image'])) ?>" target="_blank">view</a><?php else: ?>—<?php endif; ?></td>
+        <td><?php if ($p['proof_image']): ?><a href="<?= e(url('download/payment/' . $p['id'])) ?>" target="_blank">view</a><?php else: ?>—<?php endif; ?></td>
         <td><span class="badge badge-status-<?= $p['status'] === 'confirmed' ? 'active' : ($p['status'] === 'rejected' ? 'rejected' : 'pending') ?>"><?= e($p['status']) ?></span></td>
         <td class="row-actions">
           <?php if ($p['status'] === 'pending'): ?>

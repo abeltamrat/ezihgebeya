@@ -148,7 +148,7 @@ if (in_array($action, ['new', 'edit'], true) && $_SERVER['REQUEST_METHOD'] === '
                       'error' => $_FILES['images']['error'][$k], 'size' => $_FILES['images']['size'][$k]];
                 $path = upload_image($f, 'products');
                 if ($path) {
-                    $isFirst = !val("SELECT COUNT(*) FROM product_media WHERE product_id = ?", [$newId]);
+                    $isFirst = !val("SELECT COUNT(*) FROM product_media WHERE product_id = ? AND media_type = 'image'", [$newId]);
                     q("INSERT INTO product_media (product_id, file_url, is_primary) VALUES (?,?,?)", [$newId, $path, $isFirst ? 1 : 0]);
                 }
             }

@@ -110,6 +110,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                password = ?, status = 'deleted' WHERE id = ?", [password_hash(bin2hex(random_bytes(16)), PASSWORD_BCRYPT), $u['id']]);
             q("UPDATE inquiries SET name = 'Deleted user', phone = NULL WHERE customer_id = ?", [$u['id']]);
             q("DELETE FROM api_tokens WHERE user_id = ?", [$u['id']]);
+            remembered_login_revoke_user((int)$u['id']);
+            remembered_login_clear_cookie();
 
             session_unset();
             flash('Your account has been deleted.');

@@ -70,3 +70,40 @@ self.addEventListener('fetch', e => {
     e.respondWith(fetch(e.request).catch(() => caches.match(BASE + '/offline')));
   }
 });
+
+// ── Firebase Cloud Messaging web push (background/tab-closed delivery) ─────────────────
+// Handled as a raw Push API event, not firebase-messaging-sw.js's onBackgroundMessage,
+// since this project uses one shared service worker rather than a second FCM-only one.
+// FCM's HTTP v1 payload shape for a message sent with `notification` + `webpush.fcm_options.link`
+// (see app/notify.php send_push()) is not exercised against a live Firebase project in this
+// codebase yet (no real project configured) — this parser defends against the field-location
+// variations documented across FCM SDK versions rather than assuming one exact shape.
+self.addEventListener('push', e => {
+  let payload = {};
+  try { payload = e.data ? e.data.json() : {}; } catch (err) { /* non-JSON push payload */ }
+  const notification = payload.notification || {};
+  const title = notification.title || 'EzihGebeya';
+  const link = (payload.fcmOptions && payload.fcmOptions.link)
+    || (payload.data && payload.data.url)
+    || (payload.webpush && payload.webpush.fcm_options && payload.webpush.fcm_options.link)
+    || (BASE + '/');
+  e.waitUntil(self.registration.showNotification(title, {
+    body: notification.body || '',
+    icon: BASE + '/assets/icons/icon-192.png',
+    badge: BASE + '/assets/icons/icon-192.png',
+    data: { url: link },
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || (BASE + '/');
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const client of list) {
+        if (client.url === url && 'focus' in client) return client.focus();
+      }
+      return clients.openWindow ? clients.openWindow(url) : undefined;
+    })
+  );
+});

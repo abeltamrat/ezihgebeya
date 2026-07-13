@@ -31,7 +31,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (strlen($pass) < $minPass) {
             $error = "Password must be at least $minPass characters.";
         } elseif ($phone && otp_verify($phone, 'reset_password', $_POST['code'] ?? '')) {
-            q("UPDATE users SET password = ? WHERE phone = ?", [password_hash($pass, PASSWORD_BCRYPT), $phone]);
+            $resetUserId = (int)val("SELECT id FROM users WHERE phone = ?", [$phone]);
+            q("UPDATE users SET password = ? WHERE id = ?", [password_hash($pass, PASSWORD_BCRYPT), $resetUserId]);
+            q("DELETE FROM api_tokens WHERE user_id = ?", [$resetUserId]);
+            remembered_login_revoke_user($resetUserId);
             unset($_SESSION['pw_reset_phone']);
             flash('Password updated — log in with your new password.');
             redirect('login');

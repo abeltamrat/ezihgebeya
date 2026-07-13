@@ -23,7 +23,7 @@ if (!$groups): ?>
   <div class="drawer-item">
     <?php $imgUrl = null;
     if ($it['type'] === 'product') {
-        $m = row("SELECT file_url FROM product_media WHERE product_id = ? ORDER BY is_primary DESC LIMIT 1", [$it['id']]);
+        $m = row("SELECT file_url FROM product_media WHERE product_id = ? AND media_type = 'image' ORDER BY is_primary DESC, sort_order, id LIMIT 1", [$it['id']]);
         $imgUrl = $m ? thumb_url($m['file_url']) : null;
     }
     ?>

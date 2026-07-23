@@ -715,6 +715,10 @@ $isSuper = $u['account_type'] === 'super_admin';
         <label class="check"><input type="checkbox" name="sys[moderation][auto_approve_videos]" <?= $chk('moderation.auto_approve_videos') ?>> Auto-approve videos</label>
         <label class="check"><input type="checkbox" name="sys[moderation][auto_approve_reviews]" <?= $chk('moderation.auto_approve_reviews') ?>> Auto-approve reviews</label>
       </div>
+      <label style="margin-top:14px">Offensive words and phrases
+        <textarea name="sys[content_filter][offensive_words]" rows="4" placeholder="Separate terms with commas or new lines"><?= e($S['content_filter']['offensive_words'] ?? '') ?></textarea>
+        <small class="field-hint">Reviews containing these complete words or phrases are rejected before moderation. Separate entries with commas or new lines.</small>
+      </label>
     </div>
 
     <div class="panel">

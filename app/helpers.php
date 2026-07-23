@@ -25,6 +25,21 @@ function notification_destination(?array $user, ?string $storedUrl): ?string {
     return url($path);
 }
 
+/** Return configured offensive terms found as complete words/phrases in user content. */
+function offensive_content_matches(string $text): array {
+    $configured = (string)sys('content_filter.offensive_words', '');
+    $terms = preg_split('/[\r\n,]+/u', $configured) ?: [];
+    $text = mb_strtolower(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'), 'UTF-8');
+    $matches = [];
+    foreach ($terms as $term) {
+        $term = mb_strtolower(trim($term), 'UTF-8');
+        if ($term === '') continue;
+        $pattern = '/(?<![\p{L}\p{N}])' . preg_quote($term, '/') . '(?![\p{L}\p{N}])/iu';
+        if (preg_match($pattern, $text)) $matches[] = $term;
+    }
+    return array_values(array_unique($matches));
+}
+
 /** Versioned URL for a local static asset: appends ?v=<filemtime> so a rebuilt CSS/JS bundle
  * busts the browser HTTP cache and service-worker cache instead of stranding users on a stale
  * file. Falls back to the plain URL when the file can't be stat'd. */

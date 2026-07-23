@@ -6,12 +6,18 @@ $u = require_login();
 $type = $_POST['listing_type'] ?? '';
 $lid = (int)($_POST['listing_id'] ?? 0) ?: null;
 $bid = (int)($_POST['business_id'] ?? 0);
-$rating = max(1, min(5, (int)($_POST['rating'] ?? 0)));
+$rating = (int)($_POST['rating'] ?? 0);
 $comment = trim($_POST['comment'] ?? '');
 $title = trim($_POST['title'] ?? '');
 
-if (!in_array($type, ['product', 'service', 'supply', 'business'], true) || !$bid || $comment === '') {
+if (!in_array($type, ['product', 'service', 'supply', 'business'], true) || !$bid
+    || $rating < 1 || $rating > 5 || mb_strlen($comment) < 10) {
     flash('Review could not be submitted.', 'error'); redirect('');
+}
+if (offensive_content_matches($title . "\n" . $comment)) {
+    flash('Please remove offensive or inappropriate language before submitting your review.', 'error');
+    $ref = $_SERVER['HTTP_REFERER'] ?? '';
+    redirect($ref ? ltrim(substr(parse_url($ref, PHP_URL_PATH), strlen(BASE_URL)), '/') : '');
 }
 // self-review guard: an owner reviewing their own business would inflate rating_average/
 // rating_count, which directly feeds §8.4's ranking score (ranking.rating weight) and the

@@ -39,6 +39,10 @@ function system_settings_defaults(): array {
             'auto_approve_videos' => 0,
             'auto_approve_reviews' => 0,
         ],
+        'content_filter' => [
+            // Comma/newline-separated; administrators can extend this without a deployment.
+            'offensive_words' => 'fuck, shit, bitch, asshole, bastard, cunt, nigger, ደደብ, ሞኝ, ጋለሞታ',
+        ],
         'limits' => [
             'max_images_per_listing' => 6,
             'inquiry_rate_max' => 5,        // per window per session
@@ -198,6 +202,9 @@ function sanitize_system_settings(array $in): array {
         $out[$grp] = [];
         foreach ($d[$grp] as $k => $_) $out[$grp][$k] = !empty($in[$grp][$k]) ? 1 : 0;
     }
+    $out['content_filter'] = [
+        'offensive_words' => mb_substr(trim((string)($in['content_filter']['offensive_words'] ?? $d['content_filter']['offensive_words'])), 0, 5000),
+    ];
 
     $out['limits'] = [];
     foreach (['max_images_per_listing' => [1, 20], 'inquiry_rate_max' => [1, 50], 'inquiry_rate_window_min' => [1, 120],

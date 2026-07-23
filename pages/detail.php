@@ -247,20 +247,37 @@ include __DIR__ . '/../views/layout_top.php';
           </div>
         <?php endforeach; ?>
         <?php if ($u && feature_enabled('reviews')): ?>
-        <form class="mt-4" method="post" action="<?= url('review') ?>">
+        <form class="review-compose mt-4" method="post" action="<?= url('review') ?>">
           <?= csrf_field() ?>
           <input type="hidden" name="listing_type" value="<?= $type ?>">
           <input type="hidden" name="listing_id" value="<?= $item['id'] ?>">
           <input type="hidden" name="business_id" value="<?= $item['business_id'] ?>">
-          <h4 class="font-bold mb-3">Write a review</h4>
-          <label>Rating
-            <select name="rating" required>
-              <?php for ($i = 5; $i >= 1; $i--): ?><option value="<?= $i ?>"><?= str_repeat('★', $i) ?></option><?php endfor; ?>
-            </select>
+          <div class="review-compose-head">
+            <span class="review-compose-icon" aria-hidden="true">★</span>
+            <div>
+              <h4>Share your experience</h4>
+              <p>Help other customers make a confident choice.</p>
+            </div>
+          </div>
+          <fieldset class="review-rating">
+            <legend>Your rating <span aria-hidden="true">*</span></legend>
+            <div class="review-stars">
+              <?php for ($i = 5; $i >= 1; $i--): ?>
+                <input type="radio" id="review-rating-<?= $i ?>" name="rating" value="<?= $i ?>" required>
+                <label for="review-rating-<?= $i ?>" title="<?= $i ?> star<?= $i === 1 ? '' : 's' ?>" aria-label="<?= $i ?> star<?= $i === 1 ? '' : 's' ?>">★</label>
+              <?php endfor; ?>
+            </div>
+            <p>Select from 1 to 5 stars</p>
+          </fieldset>
+          <label class="review-comment">
+            <span>Your review <small>Required</small></span>
+            <textarea name="comment" rows="4" required minlength="10" maxlength="2000" placeholder="What did you like? Describe the quality, service, delivery, or overall experience."></textarea>
+            <em>Be specific and respectful. Minimum 10 characters.</em>
           </label>
-          <label>Comment <textarea name="comment" rows="3" required maxlength="2000"></textarea></label>
-          <button class="btn btn-primary btn-sm mt-2">Submit review</button>
-          <p class="muted small mt-1">Reviews appear after moderation.</p>
+          <div class="review-compose-actions">
+            <button class="btn btn-primary">Submit review <span aria-hidden="true">→</span></button>
+            <p><span aria-hidden="true">🛡</span> Reviews are checked before publication.</p>
+          </div>
         </form>
         <?php elseif (feature_enabled('reviews')): ?>
           <p class="muted mt-3"><a href="<?= url('login') ?>">Log in</a> to write a review.</p>

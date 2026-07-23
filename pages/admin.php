@@ -10,6 +10,7 @@ $sections = ['dashboard' => '📊 Dashboard', 'businesses' => '🏪 Businesses',
 $sections['support'] = 'Support';
 if ($u['account_type'] === 'super_admin') {
     $sections['ads'] = 'Ad Manager';
+    $sections['ad-placements'] = 'Advertising Placements';
     $sections['settings'] = '⚙️ System Settings';
     $sections['admins'] = 'Admins & Roles';
     $sections['backups'] = 'Backups';
@@ -270,6 +271,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif (str_starts_with($do, 'ad_') && $u['account_type'] !== 'super_admin') {
         flash('Ad Manager is restricted to the super admin.', 'error');
+    } elseif ($do === 'ad_rotation_save') {
+        $rotation = [];
+        foreach (array_keys(AD_PLACEMENTS) as $placement) {
+            $rotation[$placement] = !empty($_POST['rotation'][$placement]) ? 1 : 0;
+        }
+        site_setting_set('ad_rotation_by_placement', $rotation);
+        $inlineDelivery = $_POST['delivery']['browse_inline'] ?? [];
+        site_setting_set('ad_inline_frequency', [
+            'max_per_page' => max(0, min(10, (int)($inlineDelivery['max_per_page'] ?? 1))),
+            'listings_between' => max(2, min(30, (int)($inlineDelivery['listings_between'] ?? 3))),
+        ]);
+        audit('ad_rotation_settings', 'ads', null, json_encode($rotation));
+        flash('Advertising spot rotation settings saved.');
+    } elseif ($do === 'ad_rotation_toggle') {
+        $placement = (string)($_POST['placement'] ?? '');
+        if (!array_key_exists($placement, AD_PLACEMENTS)) {
+            flash('Unknown advertising spot.', 'error');
+        } else {
+            $rotation = ad_rotation_settings();
+            $rotation[$placement] = !empty($_POST['rotation']) ? 1 : 0;
+            site_setting_set('ad_rotation_by_placement', $rotation);
+            audit('ad_rotation_toggle', 'ads', null, $placement . ':' . $rotation[$placement]);
+            if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'XMLHttpRequest') flash('Placement delivery mode updated.');
+        }
+    } elseif ($do === 'ad_priority_order') {
+        $placement = (string)($_POST['placement'] ?? '');
+        if (!array_key_exists($placement, AD_PLACEMENTS)) {
+            flash('Unknown advertising spot.', 'error');
+        } else {
+            $requested = array_values(array_unique(array_filter(array_map(
+                'intval',
+                explode(',', (string)($_POST['order'] ?? ''))
+            ))));
+            $valid = [];
+            if ($requested) {
+                $marks = implode(',', array_fill(0, count($requested), '?'));
+                $eligible = rows("SELECT id FROM ads WHERE id IN ($marks) AND status != 'archived' AND (placement = 'any' OR placement = ?)", [...$requested, $placement]);
+                $allowed = array_flip(array_map('intval', array_column($eligible, 'id')));
+                $valid = array_values(array_filter($requested, static fn(int $id): bool => isset($allowed[$id])));
+            }
+            $orders = ad_priority_orders();
+            $orders[$placement] = $valid;
+            site_setting_set('ad_priority_order_by_placement', $orders);
+            audit('ad_priority_order', 'ads', null, $placement . ':' . implode(',', $valid));
+            if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'XMLHttpRequest') flash('Campaign priority order saved.');
+        }
     } elseif ($do === 'ad_save') {
         $fields = [
             'advertiser_name' => trim($_POST['advertiser_name'] ?? ''),
@@ -290,8 +337,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'ends_at' => ($_POST['ends_at'] ?? '') ?: null,
         ];
         if ($fields['subcity'] && !in_array($fields['subcity'], CITIES[$fields['city'] ?? ''] ?? [], true)) $fields['subcity'] = null;
-        if ($fields['advertiser_name'] === '' || $fields['destination_url'] === '') {
+        if ($fields['starts_at'] && $fields['ends_at'] && strtotime($fields['ends_at']) <= strtotime($fields['starts_at'])) {
+            flash('Campaign end time must be later than its start time.', 'error');
+        } elseif ($fields['advertiser_name'] === '' || $fields['destination_url'] === '') {
             flash('Advertiser name and destination URL are required.', 'error');
+        } elseif ($id && val("SELECT status FROM ads WHERE id = ?", [$id]) === 'active'
+            && ($conflicts = ad_campaign_conflicts($fields, $id))) {
+            flash('Campaign was not updated because its targeting and schedule overlap active campaign #' . implode(', #', array_column($conflicts, 'id')) . '.', 'error');
         } else {
             $img = upload_image($_FILES['image'] ?? [], 'ads');
             $cols = array_keys($fields); $vals = array_values($fields);
@@ -307,8 +359,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     } elseif ($do === 'ad_status' && in_array($_POST['status'] ?? '', ['draft', 'active', 'paused', 'completed', 'archived'], true)) {
-        q("UPDATE ads SET status = ? WHERE id = ?", [$_POST['status'], $id]);
-        flash('Campaign ' . $_POST['status'] . '.');
+        if ($_POST['status'] === 'active') {
+            $locked = (int)val("SELECT GET_LOCK('ezihgebeya_ad_activation', 5)");
+            try {
+                $candidate = $locked ? row("SELECT * FROM ads WHERE id = ?", [$id]) : null;
+                $conflicts = $candidate ? ad_campaign_conflicts($candidate, $id) : [];
+                if (!$locked) {
+                    flash('Another campaign is being activated. Please retry in a moment.', 'error');
+                } elseif (!$candidate) {
+                    flash('Campaign not found.', 'error');
+                } elseif ($conflicts) {
+                    flash('Cannot activate: this placement, audience, location, and schedule overlap active campaign #' . implode(', #', array_column($conflicts, 'id')) . '. Pause it or change the targeting/dates first.', 'error');
+                } else {
+                    q("UPDATE ads SET status = 'active' WHERE id = ?", [$id]);
+                    flash('Campaign active.');
+                }
+            } finally {
+                if ($locked) val("SELECT RELEASE_LOCK('ezihgebeya_ad_activation')");
+            }
+        } else {
+            q("UPDATE ads SET status = ? WHERE id = ?", [$_POST['status'], $id]);
+            flash('Campaign ' . $_POST['status'] . '.');
+        }
     } elseif ($do === 'ad_payment' && (float)($_POST['amount'] ?? 0) > 0) {
         $method = in_array($_POST['payment_method'] ?? '', ['bank_transfer', 'telebirr', 'cbe_birr', 'cash'], true) ? $_POST['payment_method'] : 'cash';
         q("INSERT INTO payments (payer_id, ad_id, payment_type, amount, payment_method, reference_number, status, confirmed_by)
@@ -842,10 +914,135 @@ include __DIR__ . '/../views/layout_top.php';
       <?php endforeach; ?>
     </table></div>
 
+  <?php elseif ($section === 'ad-placements' && $u['account_type'] === 'super_admin'): ?>
+    <?php
+      $rotationSettings = ad_rotation_settings();
+      $inlineFrequency = ad_inline_frequency_settings();
+      $activePlacementAds = rows("SELECT * FROM ads WHERE status = 'active' ORDER BY priority DESC, id");
+      $placementConflicts = [];
+      for ($left = 0; $left < count($activePlacementAds); $left++) {
+          for ($right = $left + 1; $right < count($activePlacementAds); $right++) {
+              $a = $activePlacementAds[$left]; $b = $activePlacementAds[$right];
+              if (!ad_campaigns_overlap($a, $b)) continue;
+              foreach (ad_shared_placements($a, $b) as $spot) {
+                  if (empty($rotationSettings[$spot])) $placementConflicts[$spot][] = [(int)$a['id'], (int)$b['id']];
+              }
+          }
+      }
+    ?>
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Advertising inventory</p>
+        <h1>Advertising Placements</h1>
+        <p class="muted">Control whether each spot rotates matching campaigns or remains exclusive.</p>
+      </div>
+      <a class="btn btn-outline" href="<?= url('admin/ads') ?>">Manage campaigns</a>
+    </div>
+    <?php if ($placementConflicts): ?>
+      <div class="alert alert-warning"><strong>Existing exclusive-placement collisions detected.</strong> Rotation has stopped on those spots. Pause or retarget the campaigns identified below.</div>
+    <?php endif; ?>
+    <form method="post">
+      <?= csrf_field() ?>
+      <input type="hidden" name="do" value="ad_rotation_save">
+      <div class="ad-placement-admin-grid">
+        <?php foreach (AD_PLACEMENTS as $placementKey => $placement): ?>
+          <?php
+            $eligible = array_values(array_filter($activePlacementAds, fn(array $ad): bool => $ad['placement'] === 'any' || $ad['placement'] === $placementKey));
+            $rotationOn = !empty($rotationSettings[$placementKey]);
+          ?>
+          <article class="panel ad-placement-admin-card <?= $rotationOn ? 'is-rotating' : 'is-exclusive' ?>">
+            <div class="ad-placement-card-head">
+              <span class="ad-placement-symbol" aria-hidden="true"><?= $rotationOn ? '↻' : '1' ?></span>
+              <div><h2><?= e($placement['label']) ?></h2><code><?= e($placementKey) ?></code></div>
+              <span class="badge <?= $rotationOn ? 'badge-status-active' : 'badge-status-paused' ?>"><?= $rotationOn ? 'Rotation enabled' : 'Exclusive spot' ?></span>
+            </div>
+            <p><?= e($placement['hint']) ?></p>
+            <div class="ad-placement-stats">
+              <span><strong><?= count($eligible) ?></strong> active eligible</span>
+              <span><strong><?= count($placementConflicts[$placementKey] ?? []) ?></strong> collisions</span>
+            </div>
+            <?php if (!empty($placementConflicts[$placementKey])): ?>
+              <div class="ad-placement-conflicts">
+                <?php foreach ($placementConflicts[$placementKey] as [$firstId, $secondId]): ?><span>Campaign #<?= $firstId ?> overlaps #<?= $secondId ?></span><?php endforeach; ?>
+              </div>
+            <?php endif; ?>
+            <label class="ad-rotation-toggle">
+              <span><strong>Rotate multiple campaigns</strong><small><?= $rotationOn ? 'Campaigns share this placement by targeting score and priority.' : 'Only one campaign may use the same audience and schedule.' ?></small></span>
+              <input type="checkbox" name="rotation[<?= e($placementKey) ?>]" value="1" <?= $rotationOn ? 'checked' : '' ?>>
+              <i aria-hidden="true"></i>
+            </label>
+            <?php if ($placementKey === 'browse_inline'): ?>
+              <div class="ad-placement-frequency">
+                <label>Maximum ads per results page
+                  <input type="number" name="delivery[browse_inline][max_per_page]" min="0" max="10" value="<?= (int)$inlineFrequency['max_per_page'] ?>">
+                  <small>Use 0 to hide native ad cards without disabling the whole ad system.</small>
+                </label>
+                <label>Listings between each ad
+                  <input type="number" name="delivery[browse_inline][listings_between]" min="2" max="30" value="<?= (int)$inlineFrequency['listings_between'] ?>">
+                  <small>Example: 6 inserts one ad after every six organic listings.</small>
+                </label>
+              </div>
+            <?php endif; ?>
+          </article>
+        <?php endforeach; ?>
+      </div>
+      <div class="panel ad-placement-savebar">
+        <div><strong>Placement policy applies immediately</strong><p>Disabling rotation blocks future overlapping campaign activations for that spot.</p></div>
+        <button class="btn btn-primary">Save placement settings</button>
+      </div>
+    </form>
+
   <?php elseif ($section === 'ads' && $u['account_type'] === 'super_admin'): ?>
     <?php $editAd = isset($_GET['edit']) ? row("SELECT * FROM ads WHERE id = ?", [(int)$_GET['edit']]) : null; ?>
+    <?php $previewAd = isset($_GET['preview']) ? row("SELECT * FROM ads WHERE id = ?", [(int)$_GET['preview']]) : null; ?>
 
-    <?php if ($editAd || isset($_GET['new'])): $av = fn($k, $d = '') => e($editAd[$k] ?? $d); ?>
+    <?php if ($previewAd): ?>
+      <?php
+        $previewPlacements = $previewAd['placement'] === 'any' ? array_keys(AD_PLACEMENTS) : [$previewAd['placement']];
+        $previewConflicts = ad_campaign_conflicts($previewAd, (int)$previewAd['id']);
+      ?>
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Safe preview · no impressions, clicks, or spend</p>
+          <h1>Campaign #<?= (int)$previewAd['id'] ?> preview</h1>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-outline" href="<?= url('admin/ads?edit=' . $previewAd['id']) ?>">Edit campaign</a>
+          <a class="btn btn-ghost" href="<?= url('admin/ads') ?>">Back to campaigns</a>
+        </div>
+      </div>
+      <?php if ($previewConflicts): ?>
+        <div class="alert alert-warning"><strong>Targeting collision:</strong> This campaign overlaps active campaign #<?= e(implode(', #', array_column($previewConflicts, 'id'))) ?> and cannot be activated until the conflict is resolved.</div>
+      <?php else: ?>
+        <div class="alert alert-success"><strong>Inventory available.</strong> No active campaign currently overlaps this campaign's placement, audience, location, and schedule.</div>
+      <?php endif; ?>
+      <div class="panel">
+        <div class="review-head">
+          <span class="badge badge-status-<?= e($previewAd['status']) ?>"><?= e($previewAd['status']) ?></span>
+          <strong><?= e($previewAd['advertiser_name']) ?></strong>
+          <span class="muted small"><?= e($previewAd['destination_url']) ?></span>
+        </div>
+        <p class="muted small">Preview uses the saved creative and never calls ad impression/click tracking.</p>
+      </div>
+      <div class="ad-admin-preview-grid">
+        <?php foreach ($previewPlacements as $previewPlacement): ?>
+          <section class="panel ad-admin-preview">
+            <div class="section-head">
+              <div><p class="eyebrow">Placement</p><h2><?= e(AD_PLACEMENTS[$previewPlacement]['label'] ?? $previewPlacement) ?></h2></div>
+            </div>
+            <div class="ad-admin-preview-stage ad-preview-<?= e($previewPlacement) ?>">
+              <?= ad_preview_html($previewAd, $previewPlacement) ?>
+            </div>
+          </section>
+        <?php endforeach; ?>
+      </div>
+
+    <?php elseif ($editAd || isset($_GET['new'])):
+      $av = fn($k, $d = '') => e($editAd[$k] ?? $d);
+      $schedulePlacement = isset(AD_PLACEMENTS[$_GET['placement'] ?? '']) ? $_GET['placement'] : ($editAd['placement'] ?? '');
+      $scheduleStarts = $editAd && $editAd['starts_at'] ? date('Y-m-d\TH:i', strtotime($editAd['starts_at'])) : (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/', $_GET['starts_at'] ?? '') ? $_GET['starts_at'] : '');
+      $scheduleEnds = $editAd && $editAd['ends_at'] ? date('Y-m-d\TH:i', strtotime($editAd['ends_at'])) : (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/', $_GET['ends_at'] ?? '') ? $_GET['ends_at'] : '');
+    ?>
       <h1><?= $editAd ? 'Edit campaign #' . $editAd['id'] : 'New ad campaign' ?></h1>
       <form class="panel form-2col" method="post" enctype="multipart/form-data">
         <?= csrf_field() ?>
@@ -865,7 +1062,7 @@ include __DIR__ . '/../views/layout_top.php';
           <select name="placement">
             <option value="any">Any slot</option>
             <?php foreach (AD_PLACEMENTS as $k => $p): ?>
-              <option value="<?= $k ?>" <?= ($editAd['placement'] ?? '') === $k ? 'selected' : '' ?>><?= $p['label'] ?></option>
+              <option value="<?= $k ?>" <?= $schedulePlacement === $k ? 'selected' : '' ?>><?= $p['label'] ?></option>
             <?php endforeach; ?>
           </select>
           <small class="field-hint">"Any slot" makes this campaign eligible everywhere; a specific slot restricts it to just that spot.</small>
@@ -914,14 +1111,15 @@ include __DIR__ . '/../views/layout_top.php';
         <label>Priority (1–5, weight in rotation) <input type="number" name="priority" min="1" max="5" value="<?= $av('priority', 1) ?>">
           <small class="field-hint">When more than one active campaign matches the same slot and visitor, higher priority wins more often — it doesn't guarantee exclusivity.</small>
         </label>
-        <label>Starts <input type="datetime-local" name="starts_at" value="<?= $editAd && $editAd['starts_at'] ? date('Y-m-d\TH:i', strtotime($editAd['starts_at'])) : '' ?>">
+        <label>Starts <input type="datetime-local" name="starts_at" value="<?= e($scheduleStarts) ?>">
           <small class="field-hint">Blank starts immediately once the campaign is Active.</small>
         </label>
-        <label>Ends <input type="datetime-local" name="ends_at" value="<?= $editAd && $editAd['ends_at'] ? date('Y-m-d\TH:i', strtotime($editAd['ends_at'])) : '' ?>">
+        <label>Ends <input type="datetime-local" name="ends_at" value="<?= e($scheduleEnds) ?>">
           <small class="field-hint">Blank runs indefinitely (until you pause it or the budget cap is hit).</small>
         </label>
         <div class="span2">
           <button class="btn btn-primary"><?= $editAd ? 'Save campaign' : 'Create campaign' ?></button>
+          <?php if ($editAd): ?><a class="btn btn-outline" href="<?= url('admin/ads?preview=' . $editAd['id']) ?>">Preview without running</a><?php endif; ?>
           <a class="btn btn-ghost" href="<?= url('admin/ads') ?>">Back to list</a>
         </div>
         <p class="muted small span2">Rate card hints: <?php foreach (AD_PLACEMENTS as $p) echo '<br>· <b>' . $p['label'] . '</b> — ' . $p['hint']; ?></p>
@@ -953,7 +1151,10 @@ include __DIR__ . '/../views/layout_top.php';
     <?php else: ?>
       <div class="section-head">
         <h1>📣 Ad Manager</h1>
-        <a class="btn btn-primary" href="<?= url('admin/ads?new=1') ?>">+ New campaign</a>
+        <div class="btn-row">
+          <a class="btn btn-outline" href="<?= url('admin/ad-placements') ?>">Manage placements</a>
+          <a class="btn btn-primary" href="<?= url('admin/ads?new=1') ?>">+ New campaign</a>
+        </div>
       </div>
       <?php
       $adCards = [
@@ -970,12 +1171,128 @@ include __DIR__ . '/../views/layout_top.php';
         <?php endforeach; ?>
       </div>
 
-      <?php $adsList = rows("SELECT a.*, c.name cat_name FROM ads a LEFT JOIN categories c ON c.id = a.category_id
-          WHERE a.status != 'archived' ORDER BY (a.status='active') DESC, a.created_at DESC LIMIT 200"); ?>
+      <?php
+      $adFilter = [
+          'q' => mb_substr(trim((string)($_GET['q'] ?? '')), 0, 100),
+          'status' => in_array($_GET['status'] ?? '', ['draft','active','paused','completed','archived','all'], true) ? $_GET['status'] : '',
+          'market' => in_array($_GET['market'] ?? '', ['any','product','service','supply'], true) ? $_GET['market'] : '',
+          'placement' => (($_GET['placement'] ?? '') === 'any' || isset(AD_PLACEMENTS[$_GET['placement'] ?? ''])) ? $_GET['placement'] : '',
+          'city' => isset(CITIES[$_GET['city'] ?? '']) ? $_GET['city'] : '',
+          'subcity' => in_array($_GET['subcity'] ?? '', CITIES[$_GET['city'] ?? ''] ?? [], true) ? $_GET['subcity'] : '',
+          'pricing' => isset(AD_PRICING[$_GET['pricing'] ?? '']) ? $_GET['pricing'] : '',
+          'delivery' => in_array($_GET['delivery'] ?? '', ['live','scheduled','ending','exhausted'], true) ? $_GET['delivery'] : '',
+          'group' => in_array($_GET['group'] ?? '', ['none','placement','market','city','status','advertiser'], true) ? $_GET['group'] : 'none',
+          'sort' => in_array($_GET['sort'] ?? '', ['newest','priority','spend','impressions','clicks','ctr','ending'], true) ? $_GET['sort'] : 'newest',
+      ];
+      $adWhere = []; $adParams = [];
+      if ($adFilter['status'] === '') $adWhere[] = "a.status != 'archived'";
+      elseif ($adFilter['status'] !== 'all') { $adWhere[] = 'a.status = ?'; $adParams[] = $adFilter['status']; }
+      if ($adFilter['q'] !== '') {
+          $adWhere[] = '(a.advertiser_name LIKE ? OR a.title LIKE ? OR a.destination_url LIKE ? OR a.advertiser_phone LIKE ?)';
+          $needle = '%' . $adFilter['q'] . '%'; array_push($adParams, $needle, $needle, $needle, $needle);
+      }
+      foreach (['market_type' => 'market', 'placement' => 'placement', 'city' => 'city', 'subcity' => 'subcity', 'pricing_type' => 'pricing'] as $column => $key) {
+          if ($adFilter[$key] !== '') { $adWhere[] = "a.$column = ?"; $adParams[] = $adFilter[$key]; }
+      }
+      if ($adFilter['delivery'] === 'live') $adWhere[] = "a.status='active' AND (a.starts_at IS NULL OR a.starts_at <= NOW()) AND (a.ends_at IS NULL OR a.ends_at >= NOW()) AND (a.budget <= 0 OR a.spent < a.budget)";
+      elseif ($adFilter['delivery'] === 'scheduled') $adWhere[] = "a.status='active' AND a.starts_at > NOW()";
+      elseif ($adFilter['delivery'] === 'ending') $adWhere[] = "a.status='active' AND a.ends_at BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 7 DAY)";
+      elseif ($adFilter['delivery'] === 'exhausted') $adWhere[] = "a.budget > 0 AND a.spent >= a.budget";
+      $adSortSql = [
+          'newest' => "(a.status='active') DESC, a.created_at DESC", 'priority' => 'a.priority DESC, a.created_at DESC',
+          'spend' => 'a.spent DESC, a.created_at DESC', 'impressions' => 'a.impressions_count DESC, a.created_at DESC',
+          'clicks' => 'a.clicks_count DESC, a.created_at DESC', 'ctr' => '(a.clicks_count / GREATEST(a.impressions_count,1)) DESC',
+          'ending' => 'a.ends_at IS NULL, a.ends_at ASC',
+      ][$adFilter['sort']];
+      $adsList = rows("SELECT a.*, c.name cat_name FROM ads a LEFT JOIN categories c ON c.id = a.category_id WHERE "
+          . ($adWhere ? implode(' AND ', $adWhere) : '1=1') . " ORDER BY $adSortSql LIMIT 500", $adParams);
+      $adGroupLabel = fn(array $ad): string => match ($adFilter['group']) {
+          'placement' => AD_PLACEMENTS[$ad['placement']]['label'] ?? 'Any advertising spot',
+          'market' => $ad['market_type'] === 'any' ? 'All markets' : ucfirst($ad['market_type']),
+          'city' => $ad['city'] ?: 'All cities', 'status' => ucfirst($ad['status']),
+          'advertiser' => $ad['advertiser_name'], default => 'All campaigns',
+      };
+      $adsGroups = []; foreach ($adsList as $adRow) $adsGroups[$adGroupLabel($adRow)][] = $adRow;
+      ?>
+      <form class="panel ad-manager-filters" method="get" action="<?= url('admin/ads') ?>">
+        <div class="ad-filter-head"><div><p class="eyebrow">Campaign workspace</p><h2>Filter and organize</h2></div><span><?= count($adsList) ?> result<?= count($adsList) === 1 ? '' : 's' ?></span></div>
+        <div class="ad-filter-grid">
+          <label class="ad-filter-search">Search<input name="q" value="<?= e($adFilter['q']) ?>" placeholder="Advertiser, title, phone, or URL"></label>
+          <label>Status<select name="status"><option value="">Current</option><option value="all" <?= $adFilter['status'] === 'all' ? 'selected' : '' ?>>All statuses</option><?php foreach (['draft','active','paused','completed','archived'] as $value): ?><option value="<?= $value ?>" <?= $adFilter['status'] === $value ? 'selected' : '' ?>><?= ucfirst($value) ?></option><?php endforeach; ?></select></label>
+          <label>Market<select name="market"><option value="">All markets</option><?php foreach (['any' => 'Broad / any market','product' => 'Furniture','service' => 'Services','supply' => 'Supplies'] as $value => $label): ?><option value="<?= $value ?>" <?= $adFilter['market'] === $value ? 'selected' : '' ?>><?= $label ?></option><?php endforeach; ?></select></label>
+          <label>Advertising spot<select name="placement"><option value="">All spots</option><option value="any" <?= $adFilter['placement'] === 'any' ? 'selected' : '' ?>>Any-spot campaigns</option><?php foreach (AD_PLACEMENTS as $value => $info): ?><option value="<?= $value ?>" <?= $adFilter['placement'] === $value ? 'selected' : '' ?>><?= e($info['label']) ?></option><?php endforeach; ?></select></label>
+          <label>City<select name="city" onchange="this.form.submit()"><option value="">All cities</option><?php foreach (array_keys(CITIES) as $value): ?><option value="<?= e($value) ?>" <?= $adFilter['city'] === $value ? 'selected' : '' ?>><?= e($value) ?></option><?php endforeach; ?></select></label>
+          <label>Sub-city<select name="subcity" <?= $adFilter['city'] === '' ? 'disabled' : '' ?>><option value="">All sub-cities</option><?php foreach (CITIES[$adFilter['city']] ?? [] as $value): ?><option value="<?= e($value) ?>" <?= $adFilter['subcity'] === $value ? 'selected' : '' ?>><?= e($value) ?></option><?php endforeach; ?></select></label>
+          <label>Pricing<select name="pricing"><option value="">All pricing</option><?php foreach (AD_PRICING as $value => $label): ?><option value="<?= $value ?>" <?= $adFilter['pricing'] === $value ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></label>
+          <label>Schedule<select name="delivery"><option value="">Any schedule</option><?php foreach (['live' => 'Live now','scheduled' => 'Scheduled','ending' => 'Ending in 7 days','exhausted' => 'Budget exhausted'] as $value => $label): ?><option value="<?= $value ?>" <?= $adFilter['delivery'] === $value ? 'selected' : '' ?>><?= $label ?></option><?php endforeach; ?></select></label>
+          <label>Group by<select name="group"><?php foreach (['none' => 'No grouping','placement' => 'Advertising spot','market' => 'Market','city' => 'City','status' => 'Status','advertiser' => 'Advertiser'] as $value => $label): ?><option value="<?= $value ?>" <?= $adFilter['group'] === $value ? 'selected' : '' ?>><?= $label ?></option><?php endforeach; ?></select></label>
+          <label>Sort<select name="sort"><?php foreach (['newest' => 'Active, then newest','priority' => 'Highest priority','spend' => 'Highest spend','impressions' => 'Most impressions','clicks' => 'Most clicks','ctr' => 'Highest CTR','ending' => 'Ending soon'] as $value => $label): ?><option value="<?= $value ?>" <?= $adFilter['sort'] === $value ? 'selected' : '' ?>><?= $label ?></option><?php endforeach; ?></select></label>
+        </div>
+        <div class="ad-filter-actions"><button class="btn btn-primary">Apply filters</button><a class="btn btn-ghost" href="<?= url('admin/ads') ?>">Reset</a></div>
+      </form>
+
+      <?php
+      $timelineAds = rows("SELECT a.*, c.name AS timeline_category_name FROM ads a LEFT JOIN categories c ON c.id = a.category_id WHERE a.status != 'archived' ORDER BY a.priority DESC,a.id LIMIT 1000");
+      $timelineRotation = ad_rotation_settings();
+      $timelineOrders = ad_priority_orders();
+      ?>
+      <section class="panel ad-schedule-board" id="ad-placement-timeline" data-csrf="<?= e(csrf_token()) ?>">
+        <div class="section-head">
+          <div><p class="eyebrow">Incremental inventory calendar</p><h2>Placement timeline</h2><p class="muted small">Scroll left or right to load more dates. In Exclusive mode, drag campaigns vertically—the top campaign serves first.</p></div>
+          <div class="ad-timeline-head-actions">
+            <button class="btn btn-primary btn-sm" type="button" data-timeline-today>Today</button>
+            <button class="btn btn-outline btn-sm" type="button" data-timeline-group aria-pressed="false">Group similar targeting</button>
+            <a class="btn btn-outline btn-sm" href="<?= url('admin/ad-placements') ?>">Placement policies</a>
+          </div>
+        </div>
+        <div class="ad-timeline-scale-row"><div></div><div class="ad-timeline-scroll ad-timeline-scale-scroll"><div class="ad-timeline-canvas ad-timeline-scale-canvas"></div></div></div>
+        <div class="ad-timeline">
+          <?php foreach (AD_PLACEMENTS as $spotKey => $spotInfo): ?>
+            <?php
+              $laneAds = array_values(array_filter($timelineAds, fn($ad) => $ad['placement'] === 'any' || $ad['placement'] === $spotKey));
+              $laneRanks = array_flip($timelineOrders[$spotKey] ?? []);
+              usort($laneAds, static function ($left, $right) use ($laneRanks) {
+                  $lr = $laneRanks[(int)$left['id']] ?? PHP_INT_MAX;
+                  $rr = $laneRanks[(int)$right['id']] ?? PHP_INT_MAX;
+                  return $lr !== $rr ? $lr <=> $rr : (((int)$right['priority'] <=> (int)$left['priority']) ?: ((int)$left['id'] <=> (int)$right['id']));
+              });
+              $isRotating = !empty($timelineRotation[$spotKey]);
+            ?>
+            <div class="ad-timeline-row">
+              <div class="ad-timeline-label">
+                <strong><?= e($spotInfo['label']) ?></strong><small><?= count($laneAds) ?> campaign<?= count($laneAds) === 1 ? '' : 's' ?></small>
+                <form class="ad-timeline-rotation" method="post"><?= csrf_field() ?><input type="hidden" name="do" value="ad_rotation_toggle"><input type="hidden" name="placement" value="<?= e($spotKey) ?>"><label><input type="checkbox" name="rotation" value="1" <?= $isRotating ? 'checked' : '' ?>><span>Rotate</span></label><small><?= $isRotating ? 'Weighted rotation' : 'Exclusive priority' ?></small></form>
+                <a href="<?= url('admin/ads?new=1&placement=' . urlencode($spotKey) . '&starts_at=' . date('Y-m-d\TH:i') . '&ends_at=' . date('Y-m-d\TH:i', strtotime('+7 days'))) ?>">+ Schedule here</a>
+              </div>
+              <div class="ad-timeline-scroll">
+                <div class="ad-timeline-canvas ad-timeline-track" data-placement="<?= e($spotKey) ?>" data-rotation="<?= $isRotating ? '1' : '0' ?>" style="height:<?= max(62, count($laneAds) * 30 + 12) ?>px">
+                <?php foreach ($laneAds as $rank => $timelineAd): ?>
+                  <?php
+                    $timelineTitle = $timelineAd['advertiser_name'] . ' · ' . ($timelineAd['starts_at'] ?: 'open start') . ' to ' . ($timelineAd['ends_at'] ?: 'open ended');
+                    $left = 0;
+                    $width = 100;
+                  ?>
+                  <a class="ad-timeline-bar status-<?= e($timelineAd['status']) ?>" style="left:<?= round($left, 2) ?>%;width:<?= round($width, 2) ?>%" href="<?= url('admin/ads?edit=' . $timelineAd['id']) ?>" title="<?= e($timelineAd['advertiser_name'] . ' · ' . ($timelineAd['starts_at'] ?: 'now') . ' to ' . ($timelineAd['ends_at'] ?: 'open ended')) ?>"><span>#<?= (int)$timelineAd['id'] ?> <?= e($timelineAd['title'] ?: $timelineAd['advertiser_name']) ?></span></a>
+                <?php endforeach; ?>
+                </div>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+        <script type="application/json" class="ad-timeline-data"><?= json_encode(array_map(static fn($ad) => [
+          'id' => (int)$ad['id'], 'starts_at' => $ad['starts_at'], 'ends_at' => $ad['ends_at'],
+          'placement' => $ad['placement'] ?: 'any',
+          'market_type' => $ad['market_type'] ?: 'any', 'category_id' => (int)($ad['category_id'] ?? 0), 'category_name' => $ad['timeline_category_name'] ?: '',
+          'city' => $ad['city'] ?: '', 'subcity' => $ad['subcity'] ?: '', 'pricing_type' => $ad['pricing_type'] ?: '',
+        ], $timelineAds), JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
+      </section>
+
       <?php if (!$adsList): ?><div class="empty-state">No campaigns yet — create the first one.</div><?php endif; ?>
       <div class="table-wrap"><table class="data-table">
-        <?php if ($adsList): ?><tr><th>Advertiser / Title</th><th>Targeting</th><th>Pricing</th><th>Budget</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>Status</th><th>Actions</th></tr><?php endif; ?>
-        <?php foreach ($adsList as $a): ?>
+        <?php if ($adsList): ?><tr><th>Advertiser / Title</th><th>Targeting</th><th>Schedule</th><th>Pricing</th><th>Budget</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>Status</th><th>Actions</th></tr><?php endif; ?>
+        <?php foreach ($adsGroups as $groupLabel => $groupAds): ?>
+        <?php if ($adFilter['group'] !== 'none'): ?><tr class="ad-table-group"><td colspan="10"><strong><?= e($groupLabel) ?></strong><span><?= count($groupAds) ?> campaign<?= count($groupAds) === 1 ? '' : 's' ?></span></td></tr><?php endif; ?>
+        <?php foreach ($groupAds as $a): ?>
         <tr>
           <td><strong><?= e($a['advertiser_name']) ?></strong><br><span class="muted small"><?= e($a['title'] ?: '—') ?></span></td>
           <td class="small">
@@ -983,6 +1300,11 @@ include __DIR__ . '/../views/layout_top.php';
             <?= $a['market_type'] === 'any' ? 'all markets' : e($a['market_type']) ?>
             <?= $a['cat_name'] ? ' · ' . e($a['cat_name']) : '' ?>
             <?= $a['city'] ? ' · 📍' . e($a['subcity'] ? $a['subcity'] . ', ' . $a['city'] : $a['city']) : ' · all cities' ?>
+          </td>
+          <td class="small">
+            <strong><?= $a['status'] === 'active' && (!$a['starts_at'] || strtotime($a['starts_at']) <= time()) && (!$a['ends_at'] || strtotime($a['ends_at']) >= time()) ? 'Live now' : (($a['starts_at'] && strtotime($a['starts_at']) > time()) ? 'Scheduled' : ucfirst($a['status'])) ?></strong><br>
+            <?= $a['starts_at'] ? date('M j, Y g:i A', strtotime($a['starts_at'])) : 'Immediate' ?><br>
+            <span class="muted">to <?= $a['ends_at'] ? date('M j, Y g:i A', strtotime($a['ends_at'])) : 'No end date' ?></span>
           </td>
           <td class="small"><?= strtoupper($a['pricing_type']) ?> <?= money($a['unit_price']) ?><br>P<?= (int)$a['priority'] ?></td>
           <td class="small"><?= money($a['spent']) ?: '0' ?> / <?= $a['budget'] > 0 ? money($a['budget']) : '∞' ?></td>
@@ -992,12 +1314,14 @@ include __DIR__ . '/../views/layout_top.php';
           <td><span class="badge badge-status-<?= e($a['status']) ?>"><?= e($a['status']) ?></span></td>
           <td class="row-actions">
             <a href="<?= url('admin/ads?edit=' . $a['id']) ?>" title="Edit">✏️</a>
+            <a href="<?= url('admin/ads?preview=' . $a['id']) ?>" title="Preview without tracking">Preview</a>
             <?php $next = $a['status'] === 'active' ? [['paused', '⏸']] : [['active', '▶️']]; $next[] = ['archived', '🗄']; ?>
             <?php foreach ($next as [$s, $lbl]): ?>
               <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="ad_status"><input type="hidden" name="id" value="<?= $a['id'] ?>"><input type="hidden" name="status" value="<?= $s ?>"><button title="<?= $s ?>"><?= $lbl ?></button></form>
           <?php endforeach; ?>
         </td>
         </tr>
+        <?php endforeach; ?>
         <?php endforeach; ?>
       </table></div>
 
@@ -1989,6 +2313,176 @@ include __DIR__ . '/../views/layout_top.php';
   <?php endif; ?>
   </div>
 </div>
+<script>
+(() => {
+  const board = document.getElementById('ad-placement-timeline');
+  if (!board) return;
+  const DAY = 38, CHUNK = 30, ROW = 30, DAY_MS = 86400000;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let rangeStart = new Date(today.getTime() - CHUNK * DAY_MS);
+  let rangeDays = 90, syncing = false, extending = false, dragged = null, grouped = false;
+  const scrolls = [...board.querySelectorAll('.ad-timeline-scroll')];
+  const tracks = [...board.querySelectorAll('.ad-timeline-track')];
+  const adDates = new Map(JSON.parse(board.querySelector('.ad-timeline-data')?.textContent || '[]').map(ad => [String(ad.id), ad]));
+
+  tracks.forEach(track => {
+    [...track.querySelectorAll('.ad-timeline-bar')].forEach((bar, index) => {
+      const id = bar.href.match(/edit=(\d+)/)?.[1];
+      const dates = adDates.get(id);
+      if (id) bar.dataset.adId = id;
+      bar.dataset.priorityIndex = index;
+      if (dates) {
+        bar.dataset.start = dates.starts_at || ''; bar.dataset.end = dates.ends_at || '';
+        const parts = [
+          dates.placement === 'any' ? 'Any spot' : 'This spot',
+          dates.market_type === 'any' ? 'All markets' : dates.market_type,
+          dates.category_name || 'All categories',
+          dates.city || 'All cities',
+          dates.subcity || 'All sub-cities',
+          (dates.pricing_type || 'pricing').toUpperCase(),
+        ];
+        bar.dataset.targetGroup = parts.join(' · ');
+      }
+    });
+  });
+
+  const dateAt = days => new Date(rangeStart.getTime() + days * DAY_MS);
+  const dayOffset = date => Math.floor((date - rangeStart) / DAY_MS);
+  const keepTitlesVisible = () => {
+    tracks.forEach(track => {
+      const viewportLeft = track.parentElement.scrollLeft;
+      track.querySelectorAll('.ad-timeline-group-label').forEach(label => label.style.left = `${viewportLeft + 8}px`);
+      [...track.querySelectorAll('.ad-timeline-bar')].forEach(bar => {
+        const maxShift = Math.max(0, bar.offsetWidth - Math.min(120, bar.offsetWidth));
+        const shift = Math.max(0, Math.min(maxShift, viewportLeft - bar.offsetLeft + 7));
+        bar.style.setProperty('--label-shift', `${shift}px`);
+      });
+    });
+  };
+  const goToToday = () => {
+    const viewport = scrolls.find(el => !el.classList.contains('ad-timeline-scale-scroll'))?.clientWidth || 0;
+    align(Math.max(0, dayOffset(today) * DAY - viewport / 2 + DAY / 2));
+  };
+  const render = () => {
+    const width = rangeDays * DAY;
+    board.querySelectorAll('.ad-timeline-canvas').forEach(canvas => canvas.style.width = `${width}px`);
+    const scale = board.querySelector('.ad-timeline-scale-canvas');
+    scale.innerHTML = '';
+    for (let day = 0; day <= rangeDays; day += 7) {
+      const date = dateAt(day), tick = document.createElement('span');
+      tick.style.left = `${day * DAY}px`;
+      tick.textContent = date.toDateString() === today.toDateString() ? 'Today' : date.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+      scale.appendChild(tick);
+    }
+    tracks.forEach(track => {
+      track.querySelectorAll('.ad-timeline-group-label').forEach(label => label.remove());
+      const bars = [...track.querySelectorAll('.ad-timeline-bar')];
+      bars.sort((left, right) => grouped
+        ? left.dataset.targetGroup.localeCompare(right.dataset.targetGroup) || Number(left.dataset.priorityIndex) - Number(right.dataset.priorityIndex)
+        : Number(left.dataset.priorityIndex) - Number(right.dataset.priorityIndex));
+      bars.forEach(bar => track.appendChild(bar));
+      let top = 6, lastGroup = '';
+      bars.forEach(bar => {
+        if (grouped && bar.dataset.targetGroup !== lastGroup) {
+          const label = document.createElement('div');
+          label.className = 'ad-timeline-group-label';
+          label.style.top = `${top}px`;
+          label.textContent = bar.dataset.targetGroup;
+          track.appendChild(label);
+          top += 24;
+          lastGroup = bar.dataset.targetGroup;
+        }
+        const start = bar.dataset.start ? new Date(bar.dataset.start.replace(' ', 'T')) : rangeStart;
+        const end = bar.dataset.end ? new Date(bar.dataset.end.replace(' ', 'T')) : dateAt(rangeDays);
+        const left = Math.max(0, dayOffset(start)) * DAY;
+        const right = Math.min(rangeDays, dayOffset(end) + 1) * DAY;
+        bar.style.left = `${left}px`; bar.style.width = `${Math.max(DAY, right - left)}px`; bar.style.top = `${top}px`;
+        top += ROW;
+        const rank = bar.querySelector('.ad-timeline-rank') || document.createElement('b');
+        rank.className = 'ad-timeline-rank'; rank.textContent = `#${Number(bar.dataset.priorityIndex) + 1}`;
+        if (!rank.parentNode) bar.prepend(rank);
+        bar.draggable = !grouped && track.dataset.rotation !== '1';
+      });
+      bars.forEach((bar, row) => bar.querySelector('.ad-timeline-rank').textContent = `#${Number(bar.dataset.priorityIndex) + 1}`);
+      track.style.height = `${Math.max(62, top + 6)}px`;
+    });
+    keepTitlesVisible();
+  };
+  const align = value => {
+    syncing = true;
+    scrolls.forEach(el => { if (el.scrollLeft !== value) el.scrollLeft = value; });
+    keepTitlesVisible();
+    requestAnimationFrame(() => syncing = false);
+  };
+  const extend = (direction, source) => {
+    if (extending) return;
+    extending = true;
+    if (direction < 0) { rangeStart = new Date(rangeStart.getTime() - CHUNK * DAY_MS); rangeDays += CHUNK; render(); align(source.scrollLeft + CHUNK * DAY); }
+    else { rangeDays += CHUNK; render(); }
+    requestAnimationFrame(() => extending = false);
+  };
+  scrolls.forEach(scroller => scroller.addEventListener('scroll', () => {
+    if (syncing || extending) return;
+    align(scroller.scrollLeft);
+    if (scroller.scrollLeft < 5 * DAY) extend(-1, scroller);
+    else if (scroller.scrollLeft + scroller.clientWidth > scroller.scrollWidth - 5 * DAY) extend(1, scroller);
+  }, {passive:true}));
+  board.querySelector('[data-timeline-today]')?.addEventListener('click', goToToday);
+  board.querySelector('[data-timeline-group]')?.addEventListener('click', event => {
+    grouped = !grouped;
+    board.classList.toggle('is-grouped', grouped);
+    event.currentTarget.setAttribute('aria-pressed', grouped ? 'true' : 'false');
+    event.currentTarget.textContent = grouped ? 'Show serving priority' : 'Group similar targeting';
+    render();
+  });
+
+  const post = body => fetch(location.href, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}, body});
+  board.querySelectorAll('.ad-timeline-rotation').forEach(form => form.addEventListener('change', async () => {
+    const checkbox = form.querySelector('[name=rotation]'), placement = form.querySelector('[name=placement]').value;
+    const body = new FormData(form); if (!checkbox.checked) body.set('rotation', '0');
+    const track = board.querySelector(`.ad-timeline-track[data-placement="${CSS.escape(placement)}"]`);
+    try {
+      const response = await post(body); if (!response.ok) throw new Error();
+      track.dataset.rotation = checkbox.checked ? '1' : '0';
+      form.querySelector('small').textContent = checkbox.checked ? 'Weighted rotation' : 'Exclusive priority';
+      render();
+    } catch { checkbox.checked = !checkbox.checked; alert('Could not update this placement. Please try again.'); }
+  }));
+
+  tracks.forEach(track => {
+    track.addEventListener('dragstart', event => {
+      if (grouped || track.dataset.rotation === '1') return event.preventDefault();
+      dragged = event.target.closest('.ad-timeline-bar');
+      if (!dragged) return;
+      dragged.classList.add('is-dragging'); event.dataTransfer.effectAllowed = 'move';
+    });
+    track.addEventListener('dragover', event => {
+      if (!dragged || dragged.parentElement !== track) return;
+      event.preventDefault();
+      const rect = track.getBoundingClientRect();
+      const row = Math.max(0, Math.min(track.children.length - 1, Math.floor((event.clientY - rect.top - 6) / ROW)));
+      const target = [...track.querySelectorAll('.ad-timeline-bar')].filter(bar => bar !== dragged)[row];
+      if (target) track.insertBefore(dragged, target); else track.appendChild(dragged);
+      render();
+    });
+    track.addEventListener('dragend', async () => {
+      if (!dragged) return;
+      dragged.classList.remove('is-dragging'); dragged = null;
+      [...track.querySelectorAll('.ad-timeline-bar')].forEach((bar, index) => bar.dataset.priorityIndex = index);
+      render();
+      const body = new FormData();
+      body.set('_token', board.dataset.csrf); body.set('do', 'ad_priority_order');
+      body.set('placement', track.dataset.placement);
+      body.set('order', [...track.querySelectorAll('.ad-timeline-bar')].map(bar => bar.dataset.adId).join(','));
+      try { const response = await post(body); if (!response.ok) throw new Error(); }
+      catch { alert('The priority order could not be saved. Reload to restore the saved order.'); }
+    });
+    track.addEventListener('click', event => { if (track.querySelector('.is-dragging')) event.preventDefault(); });
+  });
+  render();
+  requestAnimationFrame(goToToday);
+})();
+</script>
 <script>
 (() => {
   const sidebar = document.querySelector('.admin-sidebar');

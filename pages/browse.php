@@ -529,12 +529,16 @@ $browseHtmxAttrs = 'hx-target="#browse-page" hx-select="#browse-page" hx-swap="o
       <div class="empty-state">No listings match your filters. Try widening your search.</div>
     <?php else: ?>
       <div class="grid" aria-label="<?= number_format($total) ?> <?= $total === 1 ? 'listing result' : 'listing results' ?>">
-        <?php $adCard = ad_slot('browse_inline', $adCtx); $adPos = min(2, count($items));
+        <?php $inlineAdFrequency = ad_inline_frequency_settings(); $inlineAdsShown = 0;
         foreach ($items as $idx => $item) {
             $cardType = $type; include __DIR__ . '/../views/partial_card.php';
-            if ($idx === $adPos && $adCard) { echo $adCard; $adCard = ''; }
+            if ($inlineAdsShown < $inlineAdFrequency['max_per_page']
+                && ($idx + 1) % $inlineAdFrequency['listings_between'] === 0) {
+                $inlineAd = ad_slot('browse_inline', $adCtx);
+                if ($inlineAd) { echo $inlineAd; $inlineAdsShown++; }
+            }
         }
-        echo $adCard; ?>
+        ?>
       </div>
     <?php endif; ?>
 

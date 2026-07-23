@@ -11,7 +11,7 @@ describe('authenticated app 404', () => {
   it('chooses a dashboard that matches the account role', () => {
     expect(dashboardPath('customer')).toBe('/app/account');
     expect(dashboardPath('seller')).toBe('/app/vendor');
-    expect(dashboardPath('super_admin')).toBe('/app/admin/health');
+    expect(dashboardPath('super_admin')).toBe('/admin');
   });
 
   it('does not silently redirect an invalid route to the vendor dashboard', () => {

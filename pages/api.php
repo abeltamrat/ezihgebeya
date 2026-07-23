@@ -242,7 +242,7 @@ if ($r0 === 'inquiries' && $method === 'POST') {
         'source' => $trafficSource,
         'metadata' => ['inquiry_id' => $inqId, 'legacy_source' => 'pwa'],
     ]);
-    notify_business($bid, 'new_inquiry', 'New inquiry from ' . $me['full_name'], 'inquiries/' . $inqId, mb_substr($msg, 0, 200), true);
+    notify_business($bid, 'new_inquiry', 'New inquiry from ' . $me['full_name'], 'app/vendor/inquiries/' . $inqId, mb_substr($msg, 0, 200), true);
     api_out(['ok' => true, 'inquiry_id' => $inqId], 201);
 }
 if ($r0 === 'inquiries' && $method === 'GET') {

@@ -2,6 +2,36 @@
 // ---------- output ----------
 function e($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function url(string $path = ''): string { return BASE_URL . '/' . ltrim($path, '/'); }
+
+/** Convert historical notification destinations to the current role-aware SPA routes. */
+function notification_destination(?array $user, ?string $storedUrl): ?string {
+    $path = trim((string)$storedUrl);
+    if ($path === '') return null;
+    if (preg_match('~^https?://~i', $path)) return $path;
+    if (defined('BASE_URL') && BASE_URL !== '' && str_starts_with($path, BASE_URL . '/')) {
+        $path = substr($path, strlen(BASE_URL) + 1);
+    }
+    $path = ltrim($path, '/');
+    if (str_starts_with($path, 'app/')) return url($path);
+    if (preg_match('~^inquiries/(\d+)$~', $path, $match)) {
+        return url(($user && is_vendor($user) ? 'app/vendor/inquiries/' : 'app/account/inquiries/') . $match[1]);
+    }
+    if (preg_match('~^vendor/listings/(product|service|supply)$~', $path, $match)) {
+        return url('app/vendor/listings/' . $match[1]);
+    }
+    if ($path === 'vendor') return url('app/vendor');
+    if (str_starts_with($path, 'vendor/')) return url('app/' . $path);
+    if (str_starts_with($path, 'account/')) return url('app/' . $path);
+    return url($path);
+}
+
+/** Versioned URL for a local static asset: appends ?v=<filemtime> so a rebuilt CSS/JS bundle
+ * busts the browser HTTP cache and service-worker cache instead of stranding users on a stale
+ * file. Falls back to the plain URL when the file can't be stat'd. */
+function asset_url(string $path): string {
+    $v = @filemtime(__DIR__ . '/../' . ltrim($path, '/'));
+    return url($path) . ($v ? '?v=' . $v : '');
+}
 function redirect(string $path): never { header('Location: ' . url($path)); exit; }
 
 function money($amount): string {
@@ -227,7 +257,7 @@ function safe_return_path(?string $path, string $fallback = ''): string {
 }
 
 function default_post_login_path(array $u): string {
-    return is_admin($u) ? 'app/admin/health' : (is_vendor($u) ? 'app/vendor' : 'app/account');
+    return is_admin($u) ? 'admin' : (is_vendor($u) ? 'app/vendor' : 'app/account');
 }
 
 function require_login(): array {
@@ -264,11 +294,7 @@ function my_business(?array $u = null): ?array {
  * customer who has already sent at least one inquiry to this business — false (unlock via
  * chat first) for everyone else, including anonymous visitors. */
 function business_phone_unlocked(?array $u, int $businessId): bool {
-    if (!$u) return false;
-    if (is_admin($u)) return true;
-    $biz = my_business($u);
-    if ($biz && (int)$biz['id'] === $businessId) return true;
-    return (bool)val("SELECT COUNT(*) FROM inquiries WHERE customer_id = ? AND business_id = ?", [$u['id'], $businessId]);
+    return $u !== null;
 }
 
 // ---------- JSON API envelope (shared by the bearer-token /api and session-cookie /api/v1) ----------
@@ -650,11 +676,40 @@ function listing_badge(string $kind, string $label, ?string $icon = null): strin
         'offer' => 'M12 3v18 M16 7.5C16 5.6 14.2 5 12 5s-4 .8-4 3 4 3 4 3 4 .8 4 3-1.8 3-4 3-4-.6-4-2.5',
         'check' => 'M5 12.5 9.5 17 19 7',
     ];
-    $iconHtml = isset($paths[$icon ?? ''])
-        ? '<svg class="badge-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="' . e($paths[$icon]) . '"></path></svg>'
-        : '';
+    // Featured, verified, and discount badges use full-color glyphs (badge_rich_icon); everything
+    // else keeps the monochrome line set that inherits the badge text color.
+    $richMap = ['featured' => 'featured-star', 'discount' => 'sale-tag'];
+    $richName = $richMap[$kind] ?? (str_starts_with($kind, 'verified-') ? 'verified-shield' : null);
+    $iconHtml = $richName
+        ? badge_rich_icon($richName)
+        : (isset($paths[$icon ?? ''])
+            ? '<svg class="badge-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="' . e($paths[$icon]) . '"></path></svg>'
+            : '');
     $classes = 'badge badge-' . $kind . (str_starts_with($kind, 'verified-') ? ' badge-verified' : '');
     return '<span class="' . e($classes) . '">' . $iconHtml . '<span>' . e($label) . '</span></span>';
+}
+
+/** Full-color inline SVG badge glyphs, self-hosted (no external/flaticon requests, no attribution
+ * obligation since these are original drawings). Sized by .badge-ricon; each SVG carries its own
+ * colors. Matches the flaticon look the marketplace uses: gold sparkle star, green verified
+ * shield, red sale tag. */
+function badge_rich_icon(string $name): string {
+    $svg = [
+        'featured-star' =>
+            '<path d="M12 2.5l2.64 6.03 6.56.55-4.98 4.3 1.5 6.42L12 16.8 6.28 20l1.5-6.42-4.98-4.3 6.56-.55z" fill="#FCC419"/>'
+          . '<path d="M12 8.1l1.16 2.65 2.88.24-2.19 1.89.66 2.82L12 14.9l-2.51 1.36.66-2.82-2.19-1.89 2.88-.24z" fill="#FB8C00"/>'
+          . '<circle cx="3" cy="6.4" r=".95" fill="#8C9EFF"/><circle cx="21" cy="6.4" r=".95" fill="#8C9EFF"/>'
+          . '<circle cx="4.5" cy="18.4" r=".8" fill="#8C9EFF"/><circle cx="19.5" cy="18.4" r=".8" fill="#8C9EFF"/>'
+          . '<circle cx="12" cy="22.4" r=".8" fill="#8C9EFF"/>',
+        'verified-shield' =>
+            '<path d="M12 2.2 4.6 5v6.1c0 4.55 3.16 8.8 7.4 10.5 4.24-1.7 7.4-5.95 7.4-10.5V5z" fill="#40C057"/>'
+          . '<path d="M10.7 15.35 7.55 12.2l1.5-1.5 1.65 1.65 4.3-4.3 1.5 1.5z" fill="#F1F3F5"/>',
+        'sale-tag' =>
+            '<path d="M3 5v6l10 10 8-8L11 3H5a2 2 0 0 0-2 2z" fill="currentColor"/>'
+          . '<circle cx="7.8" cy="7.8" r="1.7" fill="var(--red)"/>',
+    ];
+    if (!isset($svg[$name])) return '';
+    return '<svg class="badge-ricon" viewBox="0 0 24 24" aria-hidden="true">' . $svg[$name] . '</svg>';
 }
 
 function verified_badge(?string $status): string {
@@ -852,7 +907,7 @@ function system_ui_defaults(): array {
         'hero_search_enabled' => 1,
         'hero_links_enabled' => 1,
         'hero_stats_enabled' => 1,
-        'category_style' => 'rail',
+        'category_style' => 'icon',
         'category_display_limit' => 8,
         'price_style' => 'standard',
         'empty_state_style' => 'dashed',
@@ -927,7 +982,7 @@ function sanitize_system_ui(array $in): array {
     $out['card_text_align'] = in_array($in['card_text_align'] ?? '', ['left', 'center'], true) ? $in['card_text_align'] : 'left';
     $out['hero_align'] = in_array($in['hero_align'] ?? '', ['left', 'center', 'split'], true) ? $in['hero_align'] : 'left';
     $out['hero_height'] = in_array($in['hero_height'] ?? '', ['compact', 'standard', 'tall'], true) ? $in['hero_height'] : 'standard';
-    $out['category_style'] = in_array($in['category_style'] ?? '', ['icon', 'minimal', 'banner', 'rail'], true) ? $in['category_style'] : 'rail';
+    $out['category_style'] = in_array($in['category_style'] ?? '', ['icon', 'minimal', 'banner', 'rail'], true) ? $in['category_style'] : 'icon';
     $out['price_style'] = in_array($in['price_style'] ?? '', ['standard', 'brand', 'accent', 'dark'], true) ? $in['price_style'] : 'standard';
     $out['empty_state_style'] = in_array($in['empty_state_style'] ?? '', ['dashed', 'soft', 'plain'], true) ? $in['empty_state_style'] : 'dashed';
     $out['card_image_ratio'] = in_array($in['card_image_ratio'] ?? '', ['1/1', '4/3', '3/2', '16/9'], true) ? $in['card_image_ratio'] : '4/3';
@@ -1020,6 +1075,18 @@ function system_ui_icon(string $name, string $label = ''): string {
         'supplies' => '<path d="M12 2.8 3.5 7v10l8.5 4.2L20.5 17V7L12 2.8Z"/><path d="M3.5 7 12 11.2 20.5 7"/><path d="M12 11.2V21.2"/>',
         'pin' => '<path d="M12 21.5s7.5-5.6 7.5-11.5a7.5 7.5 0 0 0-15 0c0 5.9 7.5 11.5 7.5 11.5Z"/><circle cx="12" cy="10" r="2.8"/>',
         'search' => '<circle cx="11" cy="11" r="6.5"/><path d="m15.8 15.8 4.7 4.7"/>',
+        'login' => '<path d="M10 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H10"/><path d="m13 8 4 4-4 4M8 12h9"/>',
+        'logout' => '<path d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14"/><path d="m11 8-4 4 4 4M16 12H7"/>',
+        'plus' => '<path d="M12 5v14M5 12h14"/>',
+        'send' => '<path d="m3.5 4.5 17 7.5-17 7.5 2.2-6.1L14 12l-8.3-1.4-2.2-6.1Z"/>',
+        'chat' => '<path d="M20.5 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.5-.7L3 20.5l1.3-5.2A8.4 8.4 0 1 1 20.5 11.5Z"/><path d="M8.5 10h7M8.5 13.2h4.5"/>',
+        'lock' => '<rect x="4.5" y="10" width="15" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14.5v2.5"/>',
+        'unlock' => '<rect x="4.5" y="10" width="15" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.2-2.4M12 14.5v2.5"/>',
+        'share' => '<circle cx="18" cy="5" r="2.2"/><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="19" r="2.2"/><path d="m8 10.9 8-4.7M8 13.1l8 4.7"/>',
+        'report' => '<path d="M5 21V4M5 5h11l-1.5 3L16 11H5"/>',
+        'heart-outline' => '<path d="M12 20.5s-8.5-5-8.5-11A4.6 4.6 0 0 1 12 6.6a4.6 4.6 0 0 1 8.5 2.9c0 6-8.5 11-8.5 11Z"/>',
+        'filter' => '<path d="M4 6h16M7 12h10M10 18h4"/><circle cx="8" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="12" cy="18" r="1.5"/>',
+        'sort' => '<path d="M8 5v14m0 0-3-3m3 3 3-3M16 19V5m0 0-3 3m3-3 3 3"/>',
         'video' => '<rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/>',
         'overview' => '<rect x="3.5" y="3.5" width="7" height="9.5" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="5.5" rx="1.2"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.2"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.2"/>',
         'business' => '<path d="M4 21h16"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9.5 21v-5h5v5"/><path d="M9 10h.01M12 10h.01M15 10h.01M9 13h.01M12 13h.01M15 13h.01"/>',
@@ -1039,7 +1106,12 @@ function system_ui_icon(string $name, string $label = ''): string {
     ];
     $body = $paths[$name] ?? $paths['category'];
     $class = $pack === 'solid' ? 'ui-icon ui-icon-solid' : 'ui-icon ui-icon-line';
-    return '<span class="' . $class . '" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">' . $body . '</svg></span>';
+    // data-ico drives the per-icon signature color + tinted chip background (assets/css/tailwind.css
+    // [data-ico] rules) — an e-commerce-style colorful icon set built from the existing line art
+    // rather than one-off multi-color illustrations, so every icon name gets consistent treatment
+    // for free. Furniture-category glyphs (sofa/bed/table/...) are deliberately left uncolored here
+    // since they already get a rotating rainbow chip from .cat-tile:nth-child in the category grid.
+    return '<span class="' . $class . '" data-ico="' . e($name) . '" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false">' . $body . '</svg></span>';
 }
 
 function system_ui_category_icon(string $categoryName, string $type = 'product'): string {
@@ -1334,6 +1406,109 @@ function cart_resolve(): array {
 }
 
 function cart_count(): int { return count(cart()); }
+
+/** Allowed order lifecycle transitions. Terminal states cannot be reopened. */
+function order_status_transitions(string $status): array {
+    return match ($status) {
+        'pending' => ['confirmed', 'deposit_paid', 'cancelled', 'disputed'],
+        'confirmed' => ['deposit_paid', 'processing', 'cancelled', 'disputed'],
+        'deposit_paid' => ['processing', 'refunded', 'disputed'],
+        'processing' => ['ready_for_delivery', 'refunded', 'disputed'],
+        'ready_for_delivery' => ['out_for_delivery', 'delivered', 'refunded', 'disputed'],
+        'out_for_delivery' => ['delivered', 'disputed'],
+        'delivered' => ['completed', 'refunded', 'disputed'],
+        'disputed' => ['refunded', 'completed'],
+        'completed' => ['refunded', 'disputed'],
+        default => [],
+    };
+}
+
+function order_can_transition(string $from, string $to): bool {
+    return $from !== $to && in_array($to, order_status_transitions($from), true);
+}
+
+/** Lock listing rows, validate availability, decrement stock, and refresh checkout
+ * snapshot prices. The caller must have an open database transaction. */
+function reserve_order_inventory(array &$groups): void {
+    foreach ($groups as &$group) {
+        $subtotal = 0.0;
+        foreach ($group['items'] as &$item) {
+            $table = $item['type'] === 'product' ? 'products' : ($item['type'] === 'supply' ? 'supplies' : '');
+            if ($table === '') throw new RuntimeException('Unsupported cart item.');
+            $record = row("SELECT * FROM `$table` WHERE id = ? FOR UPDATE", [(int)$item['id']]);
+            if (!$record || $record['status'] !== 'active') {
+                throw new RuntimeException($item['title'] . ' is no longer available.');
+            }
+            $available = (float)$record['stock_quantity'];
+            $quantity = (float)$item['qty'];
+            if ($quantity <= 0 || $available < $quantity) {
+                throw new RuntimeException($item['title'] . ' has only ' . max(0, $available) . ' available.');
+            }
+            if ($item['type'] === 'product') {
+                $price = (float)$record['discount_price'] > 0 ? (float)$record['discount_price'] : (float)$record['price'];
+                $title = $record['title'];
+            } else {
+                $minimum = max(0.01, (float)$record['minimum_order_quantity']);
+                if ($quantity < $minimum) {
+                    throw new RuntimeException($item['title'] . ' requires a minimum order of ' . $minimum . '.');
+                }
+                $price = (float)$record['price_per_unit'];
+                $title = $record['name'];
+            }
+            $emptyStatus = $item['type'] === 'product' ? 'sold_out' : 'out_of_stock';
+            $updated = q("UPDATE `$table` SET stock_quantity = stock_quantity - ?,
+                status = CASE WHEN stock_quantity - ? <= 0 THEN ? ELSE status END
+                WHERE id = ? AND status = 'active' AND stock_quantity >= ?",
+                [$quantity, $quantity, $emptyStatus, (int)$item['id'], $quantity])->rowCount();
+            if ($updated !== 1) throw new RuntimeException($item['title'] . ' is no longer available in that quantity.');
+            $item['title'] = $title;
+            $item['price'] = $price;
+            $item['line'] = $price * $quantity;
+            $subtotal += $item['line'];
+        }
+        unset($item);
+        $group['subtotal'] = $subtotal;
+    }
+    unset($group);
+}
+
+function restore_order_inventory(int $orderId): void {
+    $order = row("SELECT inventory_committed FROM orders WHERE id = ? FOR UPDATE", [$orderId]);
+    if (!$order || !(int)$order['inventory_committed']) return;
+    foreach (rows("SELECT listing_type, listing_id, quantity FROM order_items WHERE order_id = ?", [$orderId]) as $item) {
+        $table = $item['listing_type'] === 'product' ? 'products' : ($item['listing_type'] === 'supply' ? 'supplies' : '');
+        if ($table === '') continue;
+        $emptyStatus = $item['listing_type'] === 'product' ? 'sold_out' : 'out_of_stock';
+        q("UPDATE `$table` SET stock_quantity = stock_quantity + ?,
+            status = CASE WHEN status = ? THEN 'active' ELSE status END WHERE id = ?",
+            [(float)$item['quantity'], $emptyStatus, (int)$item['listing_id']]);
+    }
+    q("UPDATE orders SET inventory_committed = 0 WHERE id = ?", [$orderId]);
+}
+
+/** Validate, apply, and audit an order status change. */
+function transition_order_status(array $order, string $to, ?int $changedBy = null, ?string $note = null): bool {
+    $from = (string)$order['status'];
+    if (!order_can_transition($from, $to)) return false;
+    $ownsTransaction = !db()->inTransaction();
+    if ($ownsTransaction) db()->beginTransaction();
+    try {
+        $fresh = row("SELECT * FROM orders WHERE id = ? FOR UPDATE", [(int)$order['id']]);
+        if (!$fresh || (string)$fresh['status'] !== $from || !order_can_transition($from, $to)) {
+            if ($ownsTransaction) db()->rollBack();
+            return false;
+        }
+        if (in_array($to, ['cancelled', 'refunded'], true)) restore_order_inventory((int)$fresh['id']);
+        q("UPDATE orders SET status = ? WHERE id = ?", [$to, (int)$fresh['id']]);
+        q("INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note)
+            VALUES (?,?,?,?,?)", [(int)$fresh['id'], $from, $to, $changedBy, $note]);
+        if ($ownsTransaction) db()->commit();
+        return true;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && db()->inTransaction()) db()->rollBack();
+        throw $e;
+    }
+}
 
 // ---------- subscriptions & limits ----------
 /** Drop the premium_verified badge back to the business's earned level when no active premium

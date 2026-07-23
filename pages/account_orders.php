@@ -8,11 +8,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $oid = (int)($_POST['order_id'] ?? 0);
     $order = row("SELECT * FROM orders WHERE id = ? AND customer_id = ?", [$oid, $u['id']]);
     if ($order && ($_POST['do'] ?? '') === 'cancel' && in_array($order['status'], ['pending', 'confirmed'], true)) {
-        q("UPDATE orders SET status = 'cancelled' WHERE id = ?", [$oid]);
-        flash('Order cancelled.');
+        $hasPayment = (bool)val("SELECT COUNT(*) FROM payments WHERE order_id = ? AND status IN ('pending','confirmed')", [$oid]);
+        if ($hasPayment) flash('This order has a submitted payment. Contact the seller before cancelling.', 'error');
+        elseif (transition_order_status($order, 'cancelled', (int)$u['id'], 'Cancelled by customer')) flash('Order cancelled.');
+        else flash('This order can no longer be cancelled.', 'error');
     } elseif ($order && ($_POST['do'] ?? '') === 'pay') {
+        if (!in_array($order['status'], ['pending', 'confirmed'], true)) {
+            flash('This order is not awaiting payment.', 'error');
+            redirect('account/orders');
+        }
         $ref = trim($_POST['reference_number'] ?? '');
         $methods = payment_methods(false);
+        if (!$methods) {
+            flash('No electronic payment method is currently available.', 'error');
+            redirect('account/orders');
+        }
         $method = array_key_exists($_POST['payment_method'] ?? '', $methods) ? $_POST['payment_method'] : array_key_first($methods);
         $proof = upload_image($_FILES['proof_image'] ?? [], 'payments', true);
         // Server-side duplicate guard: the "pay" button is only hidden client-side once a
@@ -74,7 +84,7 @@ if (!$isPartial) include __DIR__ . '/../views/layout_top.php';
     <?php endforeach; ?>
 
     <div class="btn-row" style="margin-top:10px">
-      <?php if ($o['payment_method'] !== 'cash_on_delivery' && !array_filter($pays, fn($p) => $p['status'] !== 'rejected') && !in_array($o['status'], ['cancelled', 'completed'])): ?>
+      <?php if ($o['payment_method'] !== 'cash_on_delivery' && !array_filter($pays, fn($p) => $p['status'] !== 'rejected') && in_array($o['status'], ['pending', 'confirmed'], true)): ?>
         <details>
           <summary class="btn btn-outline btn-sm">💳 Submit payment proof</summary>
           <form method="post" enctype="multipart/form-data" class="panel">
@@ -92,7 +102,7 @@ if (!$isPartial) include __DIR__ . '/../views/layout_top.php';
           </form>
         </details>
       <?php endif; ?>
-      <?php if (in_array($o['status'], ['pending', 'confirmed'], true)): ?>
+      <?php if (in_array($o['status'], ['pending', 'confirmed'], true) && !array_filter($pays, fn($p) => in_array($p['status'], ['pending', 'confirmed'], true))): ?>
         <form method="post" onsubmit="return confirm('Cancel this order?')">
           <?= csrf_field() ?><input type="hidden" name="do" value="cancel"><input type="hidden" name="order_id" value="<?= $o['id'] ?>">
           <button class="btn btn-ghost btn-sm">Cancel order</button>

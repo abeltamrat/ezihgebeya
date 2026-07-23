@@ -64,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 q("UPDATE `$t` SET status = ? WHERE id = ?", [$_POST['status'], $id]);
             }
             $l = row("SELECT business_id, " . listing_title_col($_POST['ltype']) . " t FROM `$t` WHERE id = ?", [$id]);
-            if ($l && $_POST['status'] === 'active') notify_business((int)$l['business_id'], 'listing_approved', '"' . $l['t'] . '" was approved and is now live', 'vendor/listings/' . $_POST['ltype']);
+            if ($l && $_POST['status'] === 'active') notify_business((int)$l['business_id'], 'listing_approved', '"' . $l['t'] . '" was approved and is now live', 'app/vendor/listings/' . $_POST['ltype']);
             if ($l && $_POST['status'] === 'rejected') notify_business((int)$l['business_id'], 'listing_rejected', '"' . $l['t'] . '" was rejected: ' . listing_rejection_instruction($_POST['rejection_reason'] ?? 'other'), 'vendor/listings/' . $_POST['ltype']);
             flash('Listing ' . $_POST['status'] . '.');
         }
@@ -105,7 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($do === 'video_status' && in_array($_POST['status'], ['approved', 'rejected', 'disabled', 'pending', 'deleted'], true)) {
         q("UPDATE video_posts SET status = ? WHERE id = ?", [$_POST['status'], $id]);
         $v = row("SELECT business_id, title FROM video_posts WHERE id = ?", [$id]);
-        if ($v && $_POST['status'] === 'approved') notify_business((int)$v['business_id'], 'listing_approved', 'Your video was approved for the feed', 'vendor/videos');
+        if ($v && $_POST['status'] === 'approved') notify_business((int)$v['business_id'], 'listing_approved', 'Your video was approved for the feed', 'app/vendor/videos');
         if ($v && $_POST['status'] === 'rejected') notify_business((int)$v['business_id'], 'listing_rejected', 'Your video was rejected by moderation', 'vendor/videos');
         flash('Video ' . $_POST['status'] . '.');
     } elseif ($do === 'review_status' && in_array($_POST['status'], ['approved', 'rejected', 'hidden'], true)) {
@@ -184,6 +184,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif ($do === 'payment_confirm' || $do === 'payment_reject') {
         $p = row("SELECT * FROM payments WHERE id = ? AND status = 'pending'", [$id]);
+        if ($p && $do === 'payment_confirm' && $p['order_id']) {
+            $confirmableOrder = row("SELECT status FROM orders WHERE id = ?", [$p['order_id']]);
+            if (!$confirmableOrder || !in_array($confirmableOrder['status'], ['pending', 'confirmed'], true)) {
+                flash('This order is not awaiting payment confirmation.', 'error');
+                $p = null;
+            }
+        }
         // The UPDATE itself (not just the SELECT above) carries the "still pending" guard, and
         // only proceeds with the linked-item activation if this request is the one that actually
         // won the race — two near-simultaneous confirm clicks both passing the SELECT before
@@ -194,7 +201,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             q("UPDATE payments SET confirmed_by = ? WHERE id = ?", [$u['id'], $id]);
             if ($do === 'payment_confirm') {
                 if ($p['order_id']) {
-                    q("UPDATE orders SET status = 'deposit_paid' WHERE id = ? AND status IN ('pending','confirmed')", [$p['order_id']]);
+                    $paymentOrder = row("SELECT * FROM orders WHERE id = ?", [$p['order_id']]);
+                    if ($paymentOrder && in_array($paymentOrder['status'], ['pending', 'confirmed'], true)) {
+                        transition_order_status($paymentOrder, 'deposit_paid', (int)$u['id'], 'Payment confirmed by administrator');
+                    }
                 } elseif ($p['promotion_id']) {
                     $promo = row("SELECT * FROM promotions WHERE id = ?", [$p['promotion_id']]);
                     if ($promo && $promo['status'] === 'pending') {
@@ -251,10 +261,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     } elseif ($do === 'order_status' && in_array($_POST['status'] ?? '', ['pending','confirmed','deposit_paid','processing','ready_for_delivery','out_for_delivery','delivered','completed','cancelled','refunded','disputed'], true)) {
-        q("UPDATE orders SET status = ? WHERE id = ?", [$_POST['status'], $id]);
-        $o = row("SELECT customer_id, order_number FROM orders WHERE id = ?", [$id]);
-        if ($o) notify((int)$o['customer_id'], 'order_status_changed', 'Order ' . $o['order_number'] . ' is now ' . str_replace('_', ' ', $_POST['status']), 'account/orders');
-        flash('Order updated.');
+        $o = row("SELECT * FROM orders WHERE id = ?", [$id]);
+        if ($o && transition_order_status($o, $_POST['status'], (int)$u['id'], 'Updated by administrator')) {
+            notify((int)$o['customer_id'], 'order_status_changed', 'Order ' . $o['order_number'] . ' is now ' . str_replace('_', ' ', $_POST['status']), 'account/orders');
+            flash('Order updated.');
+        } else {
+            flash('That status change is not allowed.', 'error');
+        }
     } elseif (str_starts_with($do, 'ad_') && $u['account_type'] !== 'super_admin') {
         flash('Ad Manager is restricted to the super admin.', 'error');
     } elseif ($do === 'ad_save') {
@@ -393,9 +406,19 @@ include __DIR__ . '/../views/layout_top.php';
   <aside class="dash-nav admin-sidebar">
     <div class="admin-sidebar-logo">
       <span class="logo-mark"><?= e($ui['logo_mark'] ?? 'EG') ?></span>
-      <span><?= e(site_name()) ?></span>
+      <span>Admin tools</span>
     </div>
-    <h3>Admin</h3>
+    <button type="button" class="admin-menu-toggle" aria-expanded="false" aria-controls="admin-menu-links">
+      <span><small>Current section</small><strong><?= e(strip_tags($sections[$section] ?? 'Dashboard')) ?></strong></span>
+      <span class="admin-menu-toggle-icon" aria-hidden="true">☰</span>
+    </button>
+    <div class="admin-menu-backdrop" hidden></div>
+    <nav class="admin-menu-links" id="admin-menu-links" aria-label="Administration">
+      <div class="admin-menu-drawer-head">
+        <div><small>EzihGebeya</small><strong>Admin tools</strong></div>
+        <button type="button" class="admin-menu-close" aria-label="Close admin menu">×</button>
+      </div>
+      <h3>Administration</h3>
     <?php
     // Cached rather than a nightly-cron precompute (unlike the suspicious-activity trend
     // below): these drive the moderation-queue sidebar an admin acts on the same day, so a
@@ -418,6 +441,7 @@ include __DIR__ . '/../views/layout_top.php';
     foreach ($sections as $k => $label): $n = $pendCounts[$k] ?? 0; ?>
       <a href="<?= url('admin/' . $k) ?>" class="<?= $k === $section ? 'current' : '' ?>"><?= $label ?><?= $n ? " <span class='pill'>$n</span>" : '' ?></a>
     <?php endforeach; ?>
+    </nav>
   </aside>
 
   <div class="dash-main">
@@ -710,12 +734,14 @@ include __DIR__ . '/../views/layout_top.php';
         <td>
           <form method="post" class="form-inline">
             <?= csrf_field() ?><input type="hidden" name="do" value="order_status"><input type="hidden" name="id" value="<?= $o['id'] ?>">
-            <select name="status">
-              <?php foreach (['pending','confirmed','deposit_paid','processing','ready_for_delivery','out_for_delivery','delivered','completed','cancelled','refunded','disputed'] as $s): ?>
-                <option value="<?= $s ?>" <?= $o['status'] === $s ? 'selected' : '' ?>><?= str_replace('_', ' ', $s) ?></option>
+            <?php $nextStatuses = order_status_transitions($o['status']); ?>
+            <select name="status" <?= !$nextStatuses ? 'disabled' : '' ?>>
+              <option value=""><?= $nextStatuses ? 'Choose next status' : 'Final status' ?></option>
+              <?php foreach ($nextStatuses as $s): ?>
+                <option value="<?= $s ?>"><?= str_replace('_', ' ', $s) ?></option>
               <?php endforeach; ?>
             </select>
-            <button class="btn btn-outline btn-sm">Set</button>
+            <button class="btn btn-outline btn-sm" <?= !$nextStatuses ? 'disabled' : '' ?>>Set</button>
           </form>
         </td>
       </tr>
@@ -825,7 +851,9 @@ include __DIR__ . '/../views/layout_top.php';
         <label>Advertiser name * <input name="advertiser_name" required value="<?= $av('advertiser_name') ?>"></label>
         <label>Advertiser phone <input name="advertiser_phone" value="<?= $av('advertiser_phone') ?>"></label>
         <label>Ad title <input name="title" maxlength="150" value="<?= $av('title') ?>"></label>
-        <label>Destination URL * <input name="destination_url" required placeholder="https://… or /products/some-slug" value="<?= $av('destination_url') ?>"></label>
+        <label>Destination URL * <input name="destination_url" required placeholder="https://… or /products/some-slug" value="<?= $av('destination_url') ?>">
+          <small class="field-hint">Where a click sends the visitor — an internal path like <code>/products/some-slug</code> or a full external URL.</small>
+        </label>
         <label class="span2">Ad text <input name="body" maxlength="300" value="<?= $av('body') ?>"></label>
         <label>Creative image <input type="file" name="image" accept="image/*">
           <?php if ($editAd && $editAd['image']): ?><span class="muted small">current: <a href="<?= e(img_url($editAd['image'])) ?>" target="_blank">view</a></span><?php endif; ?>
@@ -837,6 +865,7 @@ include __DIR__ . '/../views/layout_top.php';
               <option value="<?= $k ?>" <?= ($editAd['placement'] ?? '') === $k ? 'selected' : '' ?>><?= $p['label'] ?></option>
             <?php endforeach; ?>
           </select>
+          <small class="field-hint">"Any slot" makes this campaign eligible everywhere; a specific slot restricts it to just that spot.</small>
         </label>
         <label>Market type
           <select name="market_type">
@@ -865,17 +894,29 @@ include __DIR__ . '/../views/layout_top.php';
             <option value="">All</option>
             <?php foreach (CITIES[$editAd['city'] ?? ''] ?? [] as $s): ?><option <?= ($editAd['subcity'] ?? '') === $s ? 'selected' : '' ?>><?= e($s) ?></option><?php endforeach; ?>
           </select>
+          <small class="field-hint">Market/category/city/sub-city all narrow the audience together (a visitor must match every one you set) — more specific targeting also wins more often when several ads compete for the same slot.</small>
         </label>
         <label>Pricing model
           <select name="pricing_type">
             <?php foreach (AD_PRICING as $k => $l): ?><option value="<?= $k ?>" <?= ($editAd['pricing_type'] ?? 'cpc') === $k ? 'selected' : '' ?>><?= $l ?></option><?php endforeach; ?>
           </select>
+          <small class="field-hint">CPM/CPC auto-add to Spent as the ad shows/gets clicked, until Budget cap is hit. Flat/week is billed manually below and never auto-consumes the budget cap.</small>
         </label>
-        <label>Unit price (ETB) <input type="number" step="0.01" name="unit_price" value="<?= $av('unit_price') ?>"></label>
-        <label>Budget cap (ETB, 0 = unlimited) <input type="number" step="0.01" name="budget" value="<?= $av('budget', 0) ?>"></label>
-        <label>Priority (1–5, weight in rotation) <input type="number" name="priority" min="1" max="5" value="<?= $av('priority', 1) ?>"></label>
-        <label>Starts <input type="datetime-local" name="starts_at" value="<?= $editAd && $editAd['starts_at'] ? date('Y-m-d\TH:i', strtotime($editAd['starts_at'])) : '' ?>"></label>
-        <label>Ends <input type="datetime-local" name="ends_at" value="<?= $editAd && $editAd['ends_at'] ? date('Y-m-d\TH:i', strtotime($editAd['ends_at'])) : '' ?>"></label>
+        <label>Unit price (ETB) <input type="number" step="0.01" name="unit_price" value="<?= $av('unit_price') ?>">
+          <small class="field-hint">Price per 1,000 views (CPM), per click (CPC), or per week (flat) — meaning depends on the pricing model above.</small>
+        </label>
+        <label>Budget cap (ETB, 0 = unlimited) <input type="number" step="0.01" name="budget" value="<?= $av('budget', 0) ?>">
+          <small class="field-hint">Campaign auto-completes once Spent reaches this — ignored by the flat/week pricing model, which never auto-spends.</small>
+        </label>
+        <label>Priority (1–5, weight in rotation) <input type="number" name="priority" min="1" max="5" value="<?= $av('priority', 1) ?>">
+          <small class="field-hint">When more than one active campaign matches the same slot and visitor, higher priority wins more often — it doesn't guarantee exclusivity.</small>
+        </label>
+        <label>Starts <input type="datetime-local" name="starts_at" value="<?= $editAd && $editAd['starts_at'] ? date('Y-m-d\TH:i', strtotime($editAd['starts_at'])) : '' ?>">
+          <small class="field-hint">Blank starts immediately once the campaign is Active.</small>
+        </label>
+        <label>Ends <input type="datetime-local" name="ends_at" value="<?= $editAd && $editAd['ends_at'] ? date('Y-m-d\TH:i', strtotime($editAd['ends_at'])) : '' ?>">
+          <small class="field-hint">Blank runs indefinitely (until you pause it or the budget cap is hit).</small>
+        </label>
         <div class="span2">
           <button class="btn btn-primary"><?= $editAd ? 'Save campaign' : 'Create campaign' ?></button>
           <a class="btn btn-ghost" href="<?= url('admin/ads') ?>">Back to list</a>
@@ -1885,8 +1926,12 @@ include __DIR__ . '/../views/layout_top.php';
 
       <form method="post" class="form-2col section-gap">
         <?= csrf_field() ?><input type="hidden" name="do" value="attr_add"><input type="hidden" name="category_id" value="<?= $attrCat ?>">
-        <label>Key <input name="key_name" placeholder="seating_capacity" required></label>
-        <label>Label <input name="label" placeholder="Seating capacity"></label>
+        <label>Key <input name="key_name" placeholder="seating_capacity" required>
+          <small class="field-hint">Internal identifier stored on the listing — letters/numbers/underscores, never shown to visitors.</small>
+        </label>
+        <label>Label <input name="label" placeholder="Seating capacity">
+          <small class="field-hint">What the vendor and shoppers actually see for this field.</small>
+        </label>
         <label>Input type
           <select name="input_type" onchange="this.form.querySelector('[name=options]').closest('label').style.display = this.value === 'select' ? '' : 'none'">
             <option value="text">Text</option>
@@ -1894,14 +1939,22 @@ include __DIR__ . '/../views/layout_top.php';
             <option value="select">Select (one of a list)</option>
             <option value="boolean">Yes / No</option>
           </select>
+          <small class="field-hint">"Select" adds a fixed dropdown (define its choices below); "Number" and "Select" values can be used for browse-page filtering.</small>
         </label>
-        <label style="display:none">Options (comma-separated) <input name="options" placeholder="2-seater, 3-seater, corner"></label>
-        <label>Unit <input name="unit" placeholder="cm, kg, seats"></label>
-        <label>Sort order <input type="number" name="sort_order" value="0"></label>
+        <label style="display:none">Options (comma-separated) <input name="options" placeholder="2-seater, 3-seater, corner">
+          <small class="field-hint">Only used when Input type is "Select" — these become the dropdown's choices, in order.</small>
+        </label>
+        <label>Unit <input name="unit" placeholder="cm, kg, seats">
+          <small class="field-hint">Optional suffix shown after the value (e.g. "180 cm") — leave blank if the label already makes it clear.</small>
+        </label>
+        <label>Sort order <input type="number" name="sort_order" value="0">
+          <small class="field-hint">Lower numbers show first among this category's attributes.</small>
+        </label>
         <div class="check-row">
           <label class="check"><input type="checkbox" name="is_required"> Required</label>
           <label class="check"><input type="checkbox" name="is_filterable" checked> Filterable on browse</label>
         </div>
+        <p class="muted small span2">Required blocks the vendor from publishing the listing without this field filled in. Filterable adds it as a filter control on this category's browse page.</p>
         <div class="span2"><button class="btn btn-primary">Add / update attribute</button></div>
       </form>
     </div>
@@ -1933,4 +1986,29 @@ include __DIR__ . '/../views/layout_top.php';
   <?php endif; ?>
   </div>
 </div>
+<script>
+(() => {
+  const sidebar = document.querySelector('.admin-sidebar');
+  const toggle = sidebar?.querySelector('.admin-menu-toggle');
+  const closeButton = sidebar?.querySelector('.admin-menu-close');
+  const backdrop = sidebar?.querySelector('.admin-menu-backdrop');
+  if (!sidebar || !toggle || !backdrop) return;
+  const setOpen = open => {
+    sidebar.classList.toggle('is-open', open);
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    backdrop.hidden = !open;
+    document.body.classList.toggle('admin-menu-open', open);
+  };
+  toggle.addEventListener('click', () => setOpen(!sidebar.classList.contains('is-open')));
+  closeButton?.addEventListener('click', () => setOpen(false));
+  backdrop.addEventListener('click', () => setOpen(false));
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') setOpen(false);
+  });
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 960) setOpen(false);
+  });
+})();
+</script>
+<?php include __DIR__ . '/../views/admin_help.php'; ?>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>

@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $note = trim($_POST['note'] ?? '');
     $enabledMethods = payment_methods(); // admin → Settings → Payments
     $method = array_key_exists($_POST['payment_method'] ?? '', $enabledMethods) ? $_POST['payment_method'] : array_key_first($enabledMethods);
+    if (!$enabledMethods) $errors[] = 'Checkout is temporarily unavailable because no payment method is enabled.';
 
     if (strlen($phone) < 9) $errors[] = 'Phone number required.';
     if ($delivery === 'delivery' && ($address === '' || !isset(CITIES[$city]))) $errors[] = 'Delivery address and city required.';
@@ -23,6 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $orderNums = [];
         try {
             db()->beginTransaction();
+            reserve_order_inventory($groups);
             foreach ($groups as $g) {
             $num = order_number();
             $trafficSource = 'organic';
@@ -32,13 +34,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($itemSource === 'promoted') $trafficSource = 'promoted';
             }
             if (db_column_exists('orders', 'traffic_source')) {
-                q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, traffic_source)
-                   VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?)",
+                q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, traffic_source, inventory_committed)
+                   VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?,1)",
                   [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
                    $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method, $trafficSource]);
             } else {
-                q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method)
-                   VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?)",
+                q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, inventory_committed)
+                   VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,1)",
                   [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
                    $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method]);
             }
@@ -69,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('account/orders');
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
-            $errors[] = 'We could not place your order. Please try again.';
+            $errors[] = $e instanceof RuntimeException ? $e->getMessage() : 'We could not place your order. Please try again.';
         }
     }
 }

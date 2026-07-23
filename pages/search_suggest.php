@@ -16,6 +16,7 @@ $searchTerms = search_expand_terms($q);
 
 [$likePTitle, $likePTitleParams] = search_like_clause('p.title', $searchTerms);
 [$likePDesc, $likePDescParams] = search_like_clause('p.description', $searchTerms);
+[$likePCategory, $likePCategoryParams] = search_like_clause('c.name', $searchTerms);
 $products = rows(
     "SELECT 'product' AS type, p.title AS title, p.slug AS slug,
             b.business_name AS biz,
@@ -24,10 +25,11 @@ $products = rows(
              ORDER BY is_primary DESC, sort_order, id LIMIT 1) AS img
      FROM products p
      JOIN businesses b ON b.id = p.business_id
+     JOIN categories c ON c.id = p.category_id
      WHERE p.status = 'active' AND b.status = 'active'
-       AND ($likePTitle OR $likePDesc)
+       AND ($likePTitle OR $likePDesc OR $likePCategory)
      LIMIT " . (int)$limit,
-    [...$likePTitleParams, ...$likePDescParams]
+    [...$likePTitleParams, ...$likePDescParams, ...$likePCategoryParams]
 );
 
 [$likeSTitle, $likeSTitleParams] = search_like_clause('s.title', $searchTerms);

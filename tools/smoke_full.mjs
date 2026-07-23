@@ -30,29 +30,31 @@ async function login(browser, phone, password, label) {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(base + '/login');
+  // Authentication does not depend on optional third-party page scripts; waiting
+  // for the full load event makes the smoke suite flaky when those hosts are slow.
+  await page.goto(base + '/login', { waitUntil: 'domcontentloaded' });
   await page.locator('input[name="identity"]').fill(phone);
   await page.locator('input[name="password"]').fill(password);
   await Promise.all([page.waitForURL(/\/(app|admin)/), page.locator('.auth-panel button').click()]);
-  const me = await page.evaluate(() => fetch('/api/v1/me').then(r => r.json()));
+  const me = await page.evaluate(baseUrl => fetch(baseUrl + '/api/v1/me').then(r => r.json()), base);
   record('auth', `${label} login`, me.authenticated === true, me.user?.account_type || 'not authenticated');
   return { context, page, me, errors };
 }
 
 async function api(page, path, options = {}) {
-  return page.evaluate(async ({ path, options }) => {
-    const me = await fetch('/api/v1/me').then(r => r.json());
+  return page.evaluate(async ({ baseUrl, path, options }) => {
+    const me = await fetch(baseUrl + '/api/v1/me').then(r => r.json());
     const init = { method: options.method || 'GET', headers: { Accept: 'application/json' } };
     if (init.method !== 'GET') init.headers['X-CSRF-Token'] = me.csrf_token;
     if (options.body !== undefined) {
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(options.body);
     }
-    const response = await fetch('/api/v1' + path, init);
+    const response = await fetch(baseUrl + '/api/v1' + path, init);
     let data = null;
     try { data = await response.json(); } catch { data = {}; }
     return { status: response.status, data };
-  }, { path, options });
+  }, { baseUrl: base, path, options });
 }
 
 async function route(page, area, path, forbiddenText = '') {

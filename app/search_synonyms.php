@@ -1,40 +1,104 @@
 <?php
 /**
- * Transliteration-aware search (PLAN.md → Marketplace fundamentals → Localization).
+ * Curated multilingual marketplace search.
  *
- * A full character-level Ge'ez transliteration engine was considered and deliberately
- * rejected: hand-authoring ~250 Unicode syllable mappings with no automated way to verify
- * correctness in this environment risks silently wrong search results, which is worse than
- * not having the feature. Instead: a curated, admin-extensible Latin<->Amharic dictionary of
- * real marketplace vocabulary (furniture items, materials, colors, rooms) — verifiable,
- * directly useful, and grows from actual customer search terms over time rather than trying
- * to solve general linguistics upfront.
- *
- * Matching is whole-query-string, not per-token: "wenber" expands, "wenber corner sofa" does
- * not. Multi-word tokenized expansion is a reasonable follow-up once real query logs exist to
- * show it's needed.
+ * Rows sharing either side form a concept. For example, `bed -> አልጋ` and
+ * `alga -> አልጋ` make all three spellings equivalent.
  */
 
-/** Expand a trimmed search query into itself plus any known Latin<->Amharic synonym, so a
- * query typed in either script also matches listings written in the other. */
-function search_expand_terms(string $q): array {
-    $q = trim($q);
-    if ($q === '') return [];
-    $terms = [$q];
-    foreach (rows("SELECT latin_term, amharic_term FROM search_synonyms
-        WHERE LOWER(latin_term) = LOWER(?) OR amharic_term = ?", [$q, $q]) as $m) {
-        $terms[] = $m['latin_term'];
-        $terms[] = $m['amharic_term'];
+function search_normalize(string $value): string {
+    $value = trim($value);
+    if ($value === '') return '';
+    if (class_exists('Normalizer')) {
+        $normalized = Normalizer::normalize($value, Normalizer::FORM_C);
+        if ($normalized !== false) $value = $normalized;
     }
-    return array_values(array_unique($terms));
+    $value = mb_strtolower($value, 'UTF-8');
+    $value = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $value) ?? $value;
+    return trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
 }
 
-/** Build an OR'd LIKE clause across every expanded term for one column.
- * Returns [sql_fragment, params]. */
+function search_synonym_rows(): array {
+    static $pairs;
+    if ($pairs === null) {
+        $pairs = rows("SELECT latin_term, amharic_term FROM search_synonyms");
+    }
+    return $pairs;
+}
+
+/** Pure expansion helper, separated from the database lookup for testing. */
+function search_expand_terms_from_pairs(string $query, array $pairs): array {
+    $query = trim($query);
+    if ($query === '') return [];
+
+    $aliases = [];
+    $edges = [];
+    foreach ($pairs as $pair) {
+        $left = search_normalize((string)($pair['latin_term'] ?? ''));
+        $right = search_normalize((string)($pair['amharic_term'] ?? ''));
+        if ($left === '' || $right === '') continue;
+        $aliases[$left] = trim((string)$pair['latin_term']);
+        $aliases[$right] = trim((string)$pair['amharic_term']);
+        $edges[$left][$right] = true;
+        $edges[$right][$left] = true;
+    }
+
+    // Resolve transitive groups: bed <-> አልጋ <-> alga.
+    $components = [];
+    $seen = [];
+    foreach (array_keys($aliases) as $start) {
+        if (isset($seen[$start])) continue;
+        $stack = [$start];
+        $component = [];
+        while ($stack) {
+            $node = array_pop($stack);
+            if (isset($seen[$node])) continue;
+            $seen[$node] = true;
+            $component[] = $node;
+            foreach (array_keys($edges[$node] ?? []) as $next) {
+                if (!isset($seen[$next])) $stack[] = $next;
+            }
+        }
+        foreach ($component as $node) $components[$node] = $component;
+    }
+
+    $terms = [$query];
+    $normalizedQuery = search_normalize($query);
+    if ($normalizedQuery !== '' && $normalizedQuery !== $query) $terms[] = $normalizedQuery;
+
+    // Longer aliases go first so a phrase such as "bet eqa" remains a unit.
+    $needles = array_keys($aliases);
+    usort($needles, fn(string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
+    foreach ($needles as $needle) {
+        $pattern = '/(?<![\p{L}\p{N}])' . preg_quote($needle, '/') . '(?![\p{L}\p{N}])/iu';
+        if (!preg_match($pattern, $normalizedQuery)) continue;
+        foreach ($components[$needle] ?? [$needle] as $alternative) {
+            $display = $aliases[$alternative] ?? $alternative;
+            $terms[] = $display;
+            $replaced = preg_replace($pattern, $display, $normalizedQuery);
+            if (is_string($replaced) && trim($replaced) !== '') $terms[] = trim($replaced);
+        }
+    }
+
+    $unique = [];
+    foreach ($terms as $term) {
+        $key = search_normalize($term);
+        if ($key !== '' && !isset($unique[$key])) $unique[$key] = trim($term);
+    }
+    return array_values($unique);
+}
+
+function search_expand_terms(string $q): array {
+    return search_expand_terms_from_pairs($q, search_synonym_rows());
+}
+
 function search_like_clause(string $col, array $terms): array {
     if (!$terms) return ['0', []];
     $parts = [];
     $params = [];
-    foreach ($terms as $t) { $parts[] = "$col LIKE ?"; $params[] = "%$t%"; }
+    foreach ($terms as $term) {
+        $parts[] = "$col LIKE ?";
+        $params[] = '%' . $term . '%';
+    }
     return ['(' . implode(' OR ', $parts) . ')', $params];
 }

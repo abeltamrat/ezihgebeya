@@ -51,6 +51,9 @@ Header always set Permissions-Policy "geolocation=(self), xr-spatial-tracking=(s
 
 # Route authenticated React app paths to the static Vite shell. Real files under
 # /app/assets are served directly by the existing-file rule above.
+# Admins use the complete PHP control center; keep old React admin bookmarks from
+# landing on the limited operations pilot.
+RewriteRule ^app/admin(?:/.*)?$ index.php [L]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^app/assets/ - [R=404,L]
 RewriteCond %{REQUEST_FILENAME} !-f

@@ -59,7 +59,7 @@ export function VendorListings() {
                 const discount = regularPrice > 0 && salePrice > 0 && salePrice < regularPrice ? Math.round(100 - salePrice / regularPrice * 100) : 0;
                 return <tr key={l.id}>
                   <td>
-                    <strong>{l.title}</strong>
+                    <a className="link" href={l.public_url}><strong>{l.title}</strong></a>
                     <div className="listing-badges">
                       {l.is_featured ? <ListingBadge variant="featured">Featured</ListingBadge> : null}
                       {l.condition_type ? <ListingBadge variant="condition">{l.condition_type === 'new' ? 'Brand new' : l.condition_type}</ListingBadge> : null}

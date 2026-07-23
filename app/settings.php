@@ -75,11 +75,15 @@ function system_settings_defaults(): array {
             'login_max_attempts' => 8,
             'login_lockout_min' => 15,
             'session_timeout_min' => SESSION_TIMEOUT_MINUTES,
-            'min_password_len' => 6,
+            'min_password_len' => 4,
         ],
         'notifications' => [
             'sms_mirror' => 1,        // mirror high-value notifications to SMS
+            'sms_provider' => 'log',  // log | generic_url | android_sms_gateway
             'sms_gateway_url' => '',  // e.g. https://sms.example/send?to={phone}&text={message}&token=SECRET
+            'android_sms_endpoint' => 'https://api.sms-gate.app/3rdparty/v1/message',
+            'android_sms_username' => '',
+            'android_sms_password' => '',
             'email_from' => 'no-reply@ezihgebeya.local',
             // Firebase Cloud Messaging web push (blank = disabled, logs to outbox.log only,
             // same graceful-degrade pattern as sms_gateway_url above). fcm_web_config is the
@@ -104,6 +108,10 @@ function system_settings(): array {
     if ($merged === null) {
         $saved = site_setting_get('system_settings', []);
         $merged = array_replace_recursive(system_settings_defaults(), is_array($saved) ? $saved : []);
+        if (is_array($saved) && !isset($saved['notifications']['sms_provider'])
+            && !empty($saved['notifications']['sms_gateway_url'])) {
+            $merged['notifications']['sms_provider'] = 'generic_url';
+        }
     }
     return $merged;
 }
@@ -244,9 +252,21 @@ function sanitize_system_settings(array $in): array {
     ];
 
     $n = $in['notifications'] ?? [];
+    $currentNotifications = (array)sys('notifications', []);
+    $smsProvider = in_array($n['sms_provider'] ?? '', ['log', 'generic_url', 'android_sms_gateway'], true)
+        ? $n['sms_provider'] : 'log';
+    $newAndroidPassword = trim((string)($n['android_sms_password'] ?? ''));
     $out['notifications'] = [
         'sms_mirror' => !empty($n['sms_mirror']) ? 1 : 0,
+        'sms_provider' => $smsProvider,
         'sms_gateway_url' => mb_substr(trim($n['sms_gateway_url'] ?? ''), 0, 500),
+        'android_sms_endpoint' => mb_substr(trim($n['android_sms_endpoint'] ?? '') ?: $d['notifications']['android_sms_endpoint'], 0, 500),
+        'android_sms_username' => mb_substr(trim($n['android_sms_username'] ?? ''), 0, 190),
+        'android_sms_password' => mb_substr(
+            $newAndroidPassword !== '' ? $newAndroidPassword : (string)($currentNotifications['android_sms_password'] ?? ''),
+            0,
+            500
+        ),
         'email_from' => mb_substr(trim($n['email_from'] ?? '') ?: $d['notifications']['email_from'], 0, 150),
         'fcm_project_id' => mb_substr(trim($n['fcm_project_id'] ?? ''), 0, 150),
         'fcm_web_config' => mb_substr(trim($n['fcm_web_config'] ?? ''), 0, 2000),

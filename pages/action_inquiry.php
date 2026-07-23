@@ -67,7 +67,7 @@ event_record('inquiry', [
     'metadata' => ['inquiry_id' => $inqId, 'legacy_source' => $source, 'conversion_action' => $conversionAction ?: null],
 ]);
 notify_business($bid, 'new_inquiry', 'New inquiry' . ($listingTitle ? ' about ' . $listingTitle : '') . ' from ' . ($name ?: $phone),
-    'inquiries/' . $inqId, mb_substr($msg, 0, 200), true);
+    'app/vendor/inquiries/' . $inqId, mb_substr($msg, 0, 200), true);
 
 flash('Inquiry sent! The vendor will contact you on ' . $phone . '.');
 $ref = $_SERVER['HTTP_REFERER'] ?? '';

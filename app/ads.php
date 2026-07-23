@@ -49,7 +49,12 @@ function ad_pick(string $placement, array $ctx = []): ?array {
 /** Record an impression: counters, CPM spend, event log, auto-complete on budget exhaustion. */
 function ad_track_impression(array $ad, string $placement): void {
     $spend = $ad['pricing_type'] === 'cpm' ? (float)$ad['unit_price'] / 1000 : 0;
-    q("UPDATE ads SET impressions_count = impressions_count + 1, spent = spent + ? WHERE id = ?", [$spend, $ad['id']]);
+    $tracked = q("UPDATE ads SET impressions_count = impressions_count + 1,
+            spent = CASE WHEN budget > 0 THEN LEAST(budget, spent + ?) ELSE spent + ? END,
+            status = CASE WHEN budget > 0 AND spent + ? >= budget THEN 'completed' ELSE status END
+        WHERE id = ? AND status = 'active' AND (budget <= 0 OR spent < budget)",
+        [$spend, $spend, $spend, $ad['id']])->rowCount();
+    if ($tracked !== 1) return;
     q("INSERT INTO ad_events (ad_id, event_type, placement, city, session_id, ip) VALUES (?, 'impression', ?, ?, ?, ?)",
       [$ad['id'], $placement, user_location()['city'], session_id(), $_SERVER['REMOTE_ADDR'] ?? null]);
     event_record('ad_impression', [
@@ -59,9 +64,6 @@ function ad_track_impression(array $ad, string $placement): void {
         'city' => user_location()['city'],
         'metadata' => ['placement' => $placement, 'advertiser' => $ad['advertiser_name'] ?? null],
     ]);
-    if ($ad['budget'] > 0 && $ad['spent'] + $spend >= $ad['budget']) {
-        q("UPDATE ads SET status = 'completed' WHERE id = ? AND budget > 0 AND spent >= budget", [$ad['id']]);
-    }
 }
 
 function ad_click_url(array $ad): string { return url('ads/go/' . $ad['id']); }

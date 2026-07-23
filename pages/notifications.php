@@ -1,6 +1,7 @@
 <?php
 /** In-app notification inbox (§15). */
 $u = require_login();
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && is_admin($u)) redirect('app/account/notifications');
 $pageTitle = 'Notifications';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

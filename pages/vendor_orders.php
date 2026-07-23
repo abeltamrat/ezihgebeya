@@ -11,14 +11,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['do'] ?? '') === 'status' && in_array($_POST['status'] ?? '', $flow, true)) {
         $o = row("SELECT * FROM orders WHERE id = ? AND business_id = ?", [$oid, $biz['id']]);
         if ($o && $o['status'] !== $_POST['status']) {
-            q("UPDATE orders SET status = ? WHERE id = ?", [$_POST['status'], $oid]);
-            notify((int)$o['customer_id'], 'order_status_changed',
-                'Order ' . $o['order_number'] . ' is now ' . str_replace('_', ' ', $_POST['status']), 'account/orders', '', true);
+            if (transition_order_status($o, $_POST['status'], (int)$u['id'], 'Updated by vendor')) {
+                notify((int)$o['customer_id'], 'order_status_changed',
+                    'Order ' . $o['order_number'] . ' is now ' . str_replace('_', ' ', $_POST['status']), 'account/orders', '', true);
+            } else {
+                flash('That status change is not allowed.', 'error');
+                redirect('vendor/orders');
+            }
         }
         flash('Order updated.');
     } elseif (($_POST['do'] ?? '') === 'confirm_payment') {
-        $p = row("SELECT p.* FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.id = ? AND o.business_id = ?", [(int)$_POST['payment_id'], $biz['id']]);
+        $p = row("SELECT p.*, o.status order_status FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.id = ? AND o.business_id = ?", [(int)$_POST['payment_id'], $biz['id']]);
         if ($p && $p['status'] === 'pending') {
+            if (!in_array($p['order_status'], ['pending', 'confirmed'], true)) {
+                flash('This order is not awaiting payment confirmation.', 'error');
+                redirect('vendor/orders');
+            }
             q("UPDATE payments SET status = 'confirmed', confirmed_by = ? WHERE id = ?", [$u['id'], $p['id']]);
             q("UPDATE orders SET status = 'deposit_paid' WHERE id = ? AND status IN ('pending','confirmed')", [$p['order_id']]);
             notify((int)$p['payer_id'], 'payment_received', 'Your payment of ' . money($p['amount']) . ' was confirmed', 'account/orders');
@@ -72,10 +80,12 @@ include __DIR__ . '/../views/layout_top.php';
       <form method="post" class="inq-status-form">
         <?= csrf_field() ?>
         <input type="hidden" name="do" value="status"><input type="hidden" name="order_id" value="<?= $o['id'] ?>">
-        <select name="status">
-          <?php foreach ($flow as $s): ?><option value="<?= $s ?>" <?= $o['status'] === $s ? 'selected' : '' ?>><?= str_replace('_', ' ', $s) ?></option><?php endforeach; ?>
+        <?php $nextStatuses = order_status_transitions($o['status']); ?>
+        <select name="status" <?= !$nextStatuses ? 'disabled' : '' ?>>
+          <option value=""><?= $nextStatuses ? 'Choose next status' : 'Final status' ?></option>
+          <?php foreach ($nextStatuses as $s): ?><option value="<?= $s ?>"><?= str_replace('_', ' ', $s) ?></option><?php endforeach; ?>
         </select>
-        <button class="btn btn-outline btn-sm">Update status</button>
+        <button class="btn btn-outline btn-sm" <?= !$nextStatuses ? 'disabled' : '' ?>>Update status</button>
       </form>
     </div>
     <?php endforeach; ?>

@@ -7,6 +7,9 @@ require __DIR__ . '/config.php';
 // hosting. Must run before session_start(), and needs BASE_URL from config.php first.
 $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
     || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+// Reject attacker-supplied session identifiers that do not already exist. This
+// complements the ID rotation performed after password and remembered-device login.
+ini_set('session.use_strict_mode', '1');
 session_set_cookie_params([
     'lifetime' => 0,
     'path' => (BASE_URL !== '' ? BASE_URL : '') . '/',
@@ -47,6 +50,10 @@ $P = __DIR__ . '/pages/';
 // .htaccess, but the PHP built-in server and some local proxy setups route
 // /app/* into index.php instead. Serve the built Vite shell here too so direct
 // refreshes like /app/vendor do not fall through to the public PHP 404 page.
+if (($seg[0] ?? '') === 'app' && ($seg[1] ?? '') === 'admin'
+    && $_SERVER['REQUEST_METHOD'] === 'GET' && is_admin(auth())) {
+    redirect('admin');
+}
 if (($seg[0] ?? '') === 'app') {
     if (($seg[1] ?? '') === 'assets') {
         http_response_code(404);

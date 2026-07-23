@@ -10,7 +10,15 @@ $billable = ($_SESSION[$key] ?? 0) < time() - 3600;
 if ($billable && $ad['status'] === 'active') {
     $_SESSION[$key] = time();
     $spend = $ad['pricing_type'] === 'cpc' ? (float)$ad['unit_price'] : 0;
-    q("UPDATE ads SET clicks_count = clicks_count + 1, spent = spent + ? WHERE id = ?", [$spend, $ad['id']]);
+    $tracked = q("UPDATE ads SET clicks_count = clicks_count + 1,
+            spent = CASE WHEN budget > 0 THEN LEAST(budget, spent + ?) ELSE spent + ? END,
+            status = CASE WHEN budget > 0 AND spent + ? >= budget THEN 'completed' ELSE status END
+        WHERE id = ? AND status = 'active' AND (budget <= 0 OR spent < budget)",
+        [$spend, $spend, $spend, $ad['id']])->rowCount();
+    if ($tracked !== 1) {
+        $billable = false;
+    }
+    if ($billable) {
     q("INSERT INTO ad_events (ad_id, event_type, placement, city, session_id, ip) VALUES (?, 'click', ?, ?, ?, ?)",
       [$ad['id'], $ad['placement'], user_location()['city'], session_id(), $_SERVER['REMOTE_ADDR'] ?? null]);
     event_record('ad_click', [
@@ -20,7 +28,7 @@ if ($billable && $ad['status'] === 'active') {
         'city' => user_location()['city'],
         'metadata' => ['placement' => $ad['placement'], 'destination_url' => $ad['destination_url']],
     ]);
-    if ($ad['budget'] > 0) q("UPDATE ads SET status = 'completed' WHERE id = ? AND spent >= budget", [$ad['id']]);
+    }
 }
 
 $dest = trim($ad['destination_url']);

@@ -2,6 +2,108 @@
 (function () {
   'use strict';
 
+  // Floating notification center
+  (function () {
+    var center = document.querySelector('.notification-center');
+    if (!center) return;
+    var trigger = center.querySelector('.nav-notification-trigger');
+    var flyout = center.querySelector('.notification-flyout');
+    var markAll = center.querySelector('.notification-mark-all');
+    var csrfMeta = document.querySelector('meta[name="csrf-token"]');
+    var apiBase = (window.AK_BASE || '').replace(/\/$/, '') + '/api/v1/account/notifications';
+
+    var setOpen = function (open) {
+      if (open) {
+        var rect = trigger.getBoundingClientRect();
+        flyout.style.setProperty('--notification-flyout-top', Math.round(rect.bottom + 8) + 'px');
+      }
+      flyout.hidden = !open;
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    var updateCount = function (count) {
+      count = Math.max(0, Number(count) || 0);
+      var navCount = trigger.querySelector('.notification-nav-count');
+      if (count > 0) {
+        if (!navCount) {
+          navCount = document.createElement('span');
+          navCount.className = 'pill notification-nav-count';
+          trigger.appendChild(navCount);
+        }
+        navCount.textContent = String(count);
+      } else if (navCount) {
+        navCount.remove();
+      }
+      trigger.setAttribute('aria-label', 'Open notifications' + (count ? ' (' + count + ' unread)' : ''));
+      var headCount = flyout.querySelector('.notification-head-count');
+      if (headCount) headCount.textContent = count ? '(' + count + ' new)' : '';
+      if (markAll) markAll.hidden = count === 0;
+    };
+    var postRead = function (suffix) {
+      return fetch(apiBase + suffix, {
+        method: 'POST',
+        credentials: 'same-origin',
+        keepalive: true,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfMeta ? csrfMeta.content : ''
+        },
+        body: '{}'
+      }).then(function (response) {
+        if (!response.ok) throw new Error('Could not update notifications');
+        return response.json();
+      });
+    };
+
+    trigger.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(flyout.hidden);
+    });
+    flyout.addEventListener('click', function (event) { event.stopPropagation(); });
+    document.addEventListener('click', function () { setOpen(false); });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && !flyout.hidden) {
+        setOpen(false);
+        trigger.focus();
+      }
+    });
+    window.addEventListener('resize', function () {
+      if (!flyout.hidden) {
+        var rect = trigger.getBoundingClientRect();
+        flyout.style.setProperty('--notification-flyout-top', Math.round(rect.bottom + 8) + 'px');
+      }
+    });
+
+    flyout.querySelectorAll('.notification-flyout-item[data-notification-id]').forEach(function (item) {
+      item.addEventListener('click', function () {
+        var id = item.dataset.notificationId;
+        if (!id || !item.classList.contains('is-unread')) return;
+        item.classList.remove('is-unread');
+        var dot = item.querySelector('.notification-unread-dot');
+        if (dot) dot.remove();
+        postRead('/' + encodeURIComponent(id) + '/read')
+          .then(function (data) { updateCount(data.unread_count); })
+          .catch(function () {});
+      });
+    });
+    if (markAll) {
+      markAll.addEventListener('click', function () {
+        markAll.disabled = true;
+        postRead('/read-all').then(function (data) {
+          flyout.querySelectorAll('.notification-flyout-item.is-unread').forEach(function (item) {
+            item.classList.remove('is-unread');
+            var dot = item.querySelector('.notification-unread-dot');
+            if (dot) dot.remove();
+          });
+          updateCount(data.unread_count);
+        }).catch(function () {
+          markAll.disabled = false;
+        });
+      });
+    }
+  })();
+
   // ── City → subcity dependent dropdown ───────────────────────────────────
   var CITIES = {
     'Addis Ababa': ['Bole','Yeka','Kirkos','Arada','Lideta','Gullele','Nifas Silk-Lafto','Kolfe Keranio','Akaky Kaliti','Addis Ketema','Lemi Kura'],
@@ -68,7 +170,7 @@
     sessionStorage.setItem('ak_geo_asked', '1');
     var csrf = function () { var m = document.querySelector('meta[name="csrf-token"]'); return m ? m.content : ''; };
     navigator.geolocation.getCurrentPosition(function (pos) {
-      fetch((window.AK_BASE || '/ezihgebeya') + '/location', {
+      fetch((window.AK_BASE || '') + '/location', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
         body: '_token=' + encodeURIComponent(csrf()) + '&lat=' + pos.coords.latitude + '&lng=' + pos.coords.longitude
@@ -125,7 +227,7 @@
 
   // ── PWA service worker ───────────────────────────────────────────────────
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register((window.AK_BASE || '/ezihgebeya') + '/sw.js', { updateViaCache: 'none' })
+    navigator.serviceWorker.register((window.AK_BASE || '') + '/sw.js', { updateViaCache: 'none' })
       .then(function (registration) {
         if (document.visibilityState === 'visible') registration.update().catch(function () {});
         document.addEventListener('visibilitychange', function () {
@@ -181,7 +283,7 @@
   // Core Web Vitals / field performance telemetry. Native APIs only; no external library.
   (function () {
     if (!('PerformanceObserver' in window)) return;
-    var endpoint = (window.AK_BASE || '/ezihgebeya') + '/web-vitals';
+    var endpoint = (window.AK_BASE || '') + '/web-vitals';
     var tokenEl = document.querySelector('meta[name="csrf-token"]');
     var token = tokenEl ? tokenEl.content : '';
     if (!token) return;

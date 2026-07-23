@@ -30,7 +30,7 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="<?= url('assets/css/app.css') ?>">
+<link rel="stylesheet" href="<?= asset_url('assets/css/app.css') ?>">
 <?= system_ui_style_tag() ?>
 <?php $canonicalUrl = absolute_url(url($canonical ?? default_canonical_path())); ?>
 <link rel="canonical" href="<?= e($canonicalUrl) ?>">
@@ -46,6 +46,7 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
 <?php if (!empty($jsonLd)): ?><script type="application/ld+json"><?= json_encode($jsonLd, JSON_UNESCAPED_SLASHES) ?></script><?php endif; ?>
 <script async src="https://telegram.org/js/telegram-web-app.js"></script>
 <meta name="csrf-token" content="<?= csrf_token() ?>">
+<script>window.AK_BASE = <?= json_encode(BASE_URL) ?>;</script>
 <?= sys('seo.head_snippet', '') /* admin → Settings → SEO: analytics / verification tags */ ?>
 <!-- Alpine.js (reactive UI components) -->
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
@@ -116,8 +117,67 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
           <?php if (cart_count()): ?><span class="pill" id="cart-pill"><?= cart_count() ?></span><?php endif; ?>
         </button>
       <?php endif; ?>
-      <?php if ($u): $nUnread = unread_notifications((int)$u['id']); ?>
-        <a href="<?= url('notifications') ?>" title="Notifications" aria-label="Notifications<?= $nUnread ? ' (' . (int)$nUnread . ' unread)' : '' ?>">🔔<?= $nUnread ? ' <span class="pill">' . $nUnread . '</span>' : '' ?></a>
+      <?php if ($u):
+        $nUnread = unread_notifications((int)$u['id']);
+        $navNotifications = rows("SELECT id, type, title, body, url, read_at, created_at
+            FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 6", [$u['id']]);
+      ?>
+        <div class="notification-center">
+          <button type="button" class="nav-notification-trigger" title="Notifications"
+                  aria-label="Open notifications<?= $nUnread ? ' (' . (int)$nUnread . ' unread)' : '' ?>"
+                  aria-expanded="false" aria-controls="notification-flyout">
+            <?= system_ui_icon('bell', 'Notifications') ?>
+            <?php if ($nUnread): ?><span class="pill notification-nav-count"><?= (int)$nUnread ?></span><?php endif; ?>
+          </button>
+          <section class="notification-flyout" id="notification-flyout" aria-label="Recent notifications" hidden>
+            <header class="notification-flyout-head">
+              <div>
+                <span class="notification-flyout-eyebrow">Activity center</span>
+                <h2>Notifications <span class="notification-head-count"><?= $nUnread ? '(' . (int)$nUnread . ' new)' : '' ?></span></h2>
+              </div>
+              <button type="button" class="notification-mark-all" <?= $nUnread ? '' : 'hidden' ?>>Mark all read</button>
+            </header>
+            <div class="notification-flyout-list">
+              <?php if (!$navNotifications): ?>
+                <div class="notification-flyout-empty">
+                  <span><?= system_ui_icon('bell', '') ?></span>
+                  <strong>You’re all caught up</strong>
+                  <p>Replies, approvals, orders, and account updates will appear here.</p>
+                </div>
+              <?php endif; ?>
+              <?php foreach ($navNotifications as $notification):
+                $notificationIcon = match (true) {
+                    str_contains($notification['type'], 'order') => 'orders',
+                    str_contains($notification['type'], 'inquiry') => 'messages',
+                    str_contains($notification['type'], 'review') => 'star',
+                    str_contains($notification['type'], 'payment') => 'orders',
+                    str_contains($notification['type'], 'verification') => 'verified',
+                    default => 'bell',
+                };
+                $itemClass = 'notification-flyout-item' . (!$notification['read_at'] ? ' is-unread' : '');
+              ?>
+                <?php if ($notification['url']): ?>
+                  <a class="<?= $itemClass ?>" href="<?= e(notification_destination($u, $notification['url'])) ?>" data-notification-id="<?= (int)$notification['id'] ?>">
+                <?php else: ?>
+                  <button type="button" class="<?= $itemClass ?>" data-notification-id="<?= (int)$notification['id'] ?>">
+                <?php endif; ?>
+                    <span class="notification-item-icon" aria-hidden="true"><?= system_ui_icon($notificationIcon, '') ?></span>
+                    <span class="notification-item-copy">
+                      <span class="notification-item-top">
+                        <strong><?= e($notification['title']) ?></strong>
+                        <?php if (!$notification['read_at']): ?><i class="notification-unread-dot" aria-label="Unread"></i><?php endif; ?>
+                      </span>
+                      <?php if ($notification['body']): ?><span class="notification-item-body"><?= e($notification['body']) ?></span><?php endif; ?>
+                      <time datetime="<?= e(date('c', strtotime($notification['created_at']))) ?>"><?= e(time_ago($notification['created_at'])) ?></time>
+                    </span>
+                <?= $notification['url'] ? '</a>' : '</button>' ?>
+              <?php endforeach; ?>
+            </div>
+            <footer class="notification-flyout-footer">
+              <a href="<?= url('app/account/notifications') ?>">Show more notifications <span aria-hidden="true">→</span></a>
+            </footer>
+          </section>
+        </div>
       <?php endif; ?>
       <?php if (!$u): ?>
         <a href="<?= url('login') ?>">Login</a>
@@ -138,13 +198,12 @@ $sellLabel = is_vendor($u) ? 'Post listing' : 'Sell / Join';
             <li class="menu-title text-xs opacity-60 pb-1"><?= e($u['full_name']) ?></li>
             <li><a href="<?= url($dashUrl) ?>"><?= system_ui_icon('user', '') ?> <?= is_admin($u) ? 'Admin panel' : (is_vendor($u) ? 'Dashboard' : 'My account') ?><?= system_ui_button_badge('account') ?></a></li>
             <?php if (is_vendor($u)): ?>
-            <li><a href="<?= url('app/vendor/listings/product/new') ?>">➕ Add listing</a></li>
+            <li><a href="<?= url('app/vendor/listings/product/new') ?>"><?= system_ui_icon('plus', 'Add') ?> Add listing</a></li>
             <?php endif; ?>
-            <li><a href="<?= url('notifications') ?>"><?= system_ui_icon('bell', '') ?> Notifications<?php $nb = unread_notifications((int)$u['id']); if ($nb): ?><span class="badge badge-primary badge-sm"><?= $nb ?></span><?php endif; ?></a></li>
             <?php if (feature_enabled('cart')): ?>
             <li><a href="<?= url('account/orders') ?>"><?= system_ui_icon('orders', '') ?> My orders</a></li>
             <?php endif; ?>
-            <li class="mt-1 border-t border-base-200 pt-1"><a href="<?= url('logout') ?>" class="text-error">🚪 Log out</a></li>
+            <li class="mt-1 border-t border-base-200 pt-1"><a href="<?= url('logout') ?>" class="text-error"><?= system_ui_icon('logout', 'Log out') ?> Log out</a></li>
           </ul>
         </div>
       <?php endif; ?>

@@ -48,7 +48,7 @@ $isSuper = $u['account_type'] === 'super_admin';
 
 <?php elseif ($section === 'locations'): ?>
   <h1>📍 Locations</h1>
-  <p class="muted">Location hierarchy (§14.1): country → region → city → subcity → woreda/area. Cities and sub-cities added here appear alongside the built-in list.</p>
+  <p class="muted">Location hierarchy (§14.1): country → region → city → subcity → woreda/area. Cities and sub-cities added here appear alongside the built-in list. Parent links a new entry into the hierarchy (e.g. a subcity's parent is its city); latitude/longitude are optional and only matter for "near you" distance sorting.</p>
   <?php $locs = rows("SELECT l.*, p.name parent_name FROM locations l LEFT JOIN locations p ON p.id = l.parent_id
         ORDER BY FIELD(l.level,'country','region','city','subcity','woreda','area'), l.name"); ?>
   <form method="post" class="panel form-inline">
@@ -91,13 +91,18 @@ $isSuper = $u['account_type'] === 'super_admin';
     <input type="hidden" name="do" value="page_save"><input type="hidden" name="id" value="<?= $editPage['id'] ?? 0 ?>">
     <h3><?= $editPage ? 'Edit: ' . e($editPage['title']) : 'New page' ?></h3>
     <div class="form-inline">
-      <label>Title <input name="title" required value="<?= e($editPage['title'] ?? '') ?>"></label>
-      <label>Slug <input name="slug" required value="<?= e($editPage['slug'] ?? '') ?>" placeholder="about"></label>
+      <label>Title <input name="title" required value="<?= e($editPage['title'] ?? '') ?>">
+        <small class="field-hint">Shown as the page heading and browser tab title.</small>
+      </label>
+      <label>Slug <input name="slug" required value="<?= e($editPage['slug'] ?? '') ?>" placeholder="about">
+        <small class="field-hint">Becomes the URL: <code><?= e(url('page/')) ?></code>+ this — changing it breaks any links already shared to the old URL.</small>
+      </label>
       <label>Status
         <select name="page_status">
           <option value="published" <?= ($editPage['status'] ?? '') !== 'draft' ? 'selected' : '' ?>>published</option>
           <option value="draft" <?= ($editPage['status'] ?? '') === 'draft' ? 'selected' : '' ?>>draft</option>
         </select>
+        <small class="field-hint">Draft pages are only visible here in admin, not on the public site.</small>
       </label>
     </div>
     <label>Body (plain text/paragraphs; blank lines separate paragraphs)
@@ -657,22 +662,35 @@ $isSuper = $u['account_type'] === 'super_admin';
     <div class="panel">
       <h3>🏷 General & identity</h3>
       <div class="form-2col">
-        <label>Site name <input name="sys[general][site_name]" value="<?= e($S['general']['site_name']) ?>"></label>
-        <label>Tagline <input name="sys[general][tagline]" value="<?= e($S['general']['tagline']) ?>"></label>
-        <label>Currency label <input name="sys[general][currency_label]" value="<?= e($S['general']['currency_label']) ?>" size="6"></label>
+        <label>Site name <input name="sys[general][site_name]" value="<?= e($S['general']['site_name']) ?>">
+          <small class="field-hint">Appears in the header, browser tab titles, and outgoing SMS/email.</small>
+        </label>
+        <label>Tagline <input name="sys[general][tagline]" value="<?= e($S['general']['tagline']) ?>">
+          <small class="field-hint">Under the logo on the homepage and as the default social-share description.</small>
+        </label>
+        <label>Currency label <input name="sys[general][currency_label]" value="<?= e($S['general']['currency_label']) ?>" size="6">
+          <small class="field-hint">Appended to every price shown across the site — doesn't convert values, just relabels them.</small>
+        </label>
         <label>Default city
           <select name="sys[general][default_city]">
             <?php foreach (array_keys(CITIES) as $c): ?><option <?= $S['general']['default_city'] === $c ? 'selected' : '' ?>><?= e($c) ?></option><?php endforeach; ?>
           </select>
+          <small class="field-hint">Used to filter the homepage and browse pages when a visitor's location can't be detected.</small>
         </label>
-        <label>Contact phone <input name="sys[general][contact_phone]" value="<?= e($S['general']['contact_phone']) ?>"></label>
-        <label>Contact email <input name="sys[general][contact_email]" value="<?= e($S['general']['contact_email']) ?>"></label>
+        <label>Contact phone <input name="sys[general][contact_phone]" value="<?= e($S['general']['contact_phone']) ?>">
+          <small class="field-hint">Shown in the site footer and on the Contact page.</small>
+        </label>
+        <label>Contact email <input name="sys[general][contact_email]" value="<?= e($S['general']['contact_email']) ?>">
+          <small class="field-hint">Shown on the Contact page — not used to send anything automatically.</small>
+        </label>
       </div>
       <div class="check-row">
         <label class="check"><input type="checkbox" name="sys[general][registration_open]" <?= $chk('general.registration_open') ?>> New registrations open</label>
         <label class="check"><input type="checkbox" name="sys[general][maintenance_mode]" <?= $chk('general.maintenance_mode') ?>> 🔧 <b>Maintenance mode</b> (site offline for everyone except admins)</label>
       </div>
-      <label>Maintenance message <input name="sys[general][maintenance_message]" value="<?= e($S['general']['maintenance_message']) ?>"></label>
+      <label>Maintenance message <input name="sys[general][maintenance_message]" value="<?= e($S['general']['maintenance_message']) ?>">
+        <small class="field-hint">Shown to visitors on the offline page while maintenance mode is on.</small>
+      </label>
     </div>
 
     <div class="panel">
@@ -702,18 +720,33 @@ $isSuper = $u['account_type'] === 'super_admin';
     <div class="panel">
       <h3>📏 Limits</h3>
       <div class="form-2col">
-        <label>Max images per listing <input type="number" name="sys[limits][max_images_per_listing]" min="1" max="20" value="<?= (int)$S['limits']['max_images_per_listing'] ?>"></label>
-        <label>Inquiries per visitor per window <input type="number" name="sys[limits][inquiry_rate_max]" min="1" max="50" value="<?= (int)$S['limits']['inquiry_rate_max'] ?>"></label>
-        <label>Inquiry rate window (minutes) <input type="number" name="sys[limits][inquiry_rate_window_min]" min="1" max="120" value="<?= (int)$S['limits']['inquiry_rate_window_min'] ?>"></label>
-        <label>Uploads per visitor per window <input type="number" name="sys[limits][upload_rate_max]" min="1" max="200" value="<?= (int)$S['limits']['upload_rate_max'] ?>"></label>
-        <label>Upload rate window (minutes) <input type="number" name="sys[limits][upload_rate_window_min]" min="1" max="240" value="<?= (int)$S['limits']['upload_rate_window_min'] ?>"></label>
-        <label>Video feed size <input type="number" name="sys[limits][video_feed_size]" min="10" max="200" value="<?= (int)$S['limits']['video_feed_size'] ?>"></label>
-        <label>AR model max size (MB) <input type="number" name="sys[limits][ar_model_max_mb]" min="1" max="100" value="<?= (int)$S['limits']['ar_model_max_mb'] ?>"></label>
+        <label>Max images per listing <input type="number" name="sys[limits][max_images_per_listing]" min="1" max="20" value="<?= (int)$S['limits']['max_images_per_listing'] ?>">
+          <small class="field-hint">Applies per product, service, or supply listing — vendors can't upload past this.</small>
+        </label>
+        <label>Inquiries per visitor per window <input type="number" name="sys[limits][inquiry_rate_max]" min="1" max="50" value="<?= (int)$S['limits']['inquiry_rate_max'] ?>">
+          <small class="field-hint">Caps how many "contact seller" messages one visitor can send before being throttled.</small>
+        </label>
+        <label>Inquiry rate window (minutes) <input type="number" name="sys[limits][inquiry_rate_window_min]" min="1" max="120" value="<?= (int)$S['limits']['inquiry_rate_window_min'] ?>">
+          <small class="field-hint">How long the cap above counts over before it resets.</small>
+        </label>
+        <label>Uploads per visitor per window <input type="number" name="sys[limits][upload_rate_max]" min="1" max="200" value="<?= (int)$S['limits']['upload_rate_max'] ?>">
+          <small class="field-hint">Separate from the inquiry limit — covers listing photos, videos, and payment-proof uploads.</small>
+        </label>
+        <label>Upload rate window (minutes) <input type="number" name="sys[limits][upload_rate_window_min]" min="1" max="240" value="<?= (int)$S['limits']['upload_rate_window_min'] ?>">
+          <small class="field-hint">How long the upload cap above counts over before it resets.</small>
+        </label>
+        <label>Video feed size <input type="number" name="sys[limits][video_feed_size]" min="10" max="200" value="<?= (int)$S['limits']['video_feed_size'] ?>">
+          <small class="field-hint">How many videos load into the feed per page/scroll batch.</small>
+        </label>
+        <label>AR model max size (MB) <input type="number" name="sys[limits][ar_model_max_mb]" min="1" max="100" value="<?= (int)$S['limits']['ar_model_max_mb'] ?>">
+          <small class="field-hint">Largest 3D model file (.glb/.usdz) a vendor can attach — AR preview is a Premium-plan feature.</small>
+        </label>
       </div>
     </div>
 
     <div class="panel">
       <h3>🎫 Subscription plans (§26.2)</h3>
+      <p class="muted small">Changes apply to new purchases and renewals immediately — businesses mid-term on the old price are unaffected until they renew.</p>
       <div class="table-wrap"><table class="data-table">
         <tr><th>Plan</th><th>Price (ETB/month)</th><th>Listing limit (−1 = unlimited)</th><th>Video limit (−1 = unlimited)</th></tr>
         <?php foreach (PLANS as $k => $p): ?>
@@ -729,6 +762,7 @@ $isSuper = $u['account_type'] === 'super_admin';
 
     <div class="panel">
       <h3>📣 Promotion pricing (§9)</h3>
+      <p class="muted small">Changes apply to promotions purchased after saving — promotions already running keep the price they were bought at.</p>
       <div class="table-wrap"><table class="data-table">
         <tr><th>Promotion</th><th>Price (ETB/week)</th></tr>
         <?php foreach (PROMO_TYPES as $k => $p): ?>
@@ -739,6 +773,7 @@ $isSuper = $u['account_type'] === 'super_admin';
 
     <div class="panel">
       <h3>💳 Payments (§12)</h3>
+      <p class="muted small">Unchecking a method removes it from checkout and from vendor promotion/subscription upgrade forms immediately.</p>
       <div class="check-row" style="flex-wrap:wrap">
         <label class="check"><input type="checkbox" name="sys[payments][cash_on_delivery]" <?= $chk('payments.cash_on_delivery') ?>> Cash on delivery</label>
         <label class="check"><input type="checkbox" name="sys[payments][bank_transfer]" <?= $chk('payments.bank_transfer') ?>> Bank transfer</label>
@@ -747,9 +782,11 @@ $isSuper = $u['account_type'] === 'super_admin';
       </div>
       <label>Payment instructions shown to buyers at checkout / upgrade forms
         <textarea name="sys[payments][instructions]" rows="4"><?= e($S['payments']['instructions']) ?></textarea>
+        <small class="field-hint">Put account/wallet numbers here — shown next to whichever method the buyer picks, for every payment method above.</small>
       </label>
       <label>Commission per completed order (%) — 0 = commission-free marketplace
         <input type="number" step="0.1" min="0" max="50" name="sys[payments][commission_percent]" value="<?= (float)$S['payments']['commission_percent'] ?>" style="max-width:120px">
+        <small class="field-hint">Informational only — the platform never holds buyer funds, so this shows as "commission owed" in Analytics for you to invoice vendors separately, not an automatic deduction.</small>
       </label>
     </div>
 
@@ -778,11 +815,20 @@ $isSuper = $u['account_type'] === 'super_admin';
       <div class="check-row">
         <label class="check"><input type="checkbox" name="sys[auth][otp_required]" <?= $chk('auth.otp_required') ?>> Require SMS OTP verification after registration</label>
       </div>
+      <p class="muted small">In DEV mode (<code>DEV_MODE</code> in config.php) OTP codes are shown on screen instead of sent, regardless of this setting.</p>
       <div class="form-2col">
-        <label>Failed logins before lockout <input type="number" min="3" max="50" name="sys[auth][login_max_attempts]" value="<?= (int)$S['auth']['login_max_attempts'] ?>"></label>
-        <label>Lockout window (minutes) <input type="number" min="1" max="1440" name="sys[auth][login_lockout_min]" value="<?= (int)$S['auth']['login_lockout_min'] ?>"></label>
-        <label>Idle session timeout (minutes) <input type="number" min="10" max="10080" name="sys[auth][session_timeout_min]" value="<?= (int)$S['auth']['session_timeout_min'] ?>"></label>
-        <label>Minimum password length <input type="number" min="4" max="64" name="sys[auth][min_password_len]" value="<?= (int)$S['auth']['min_password_len'] ?>"></label>
+        <label>Failed logins before lockout <input type="number" min="3" max="50" name="sys[auth][login_max_attempts]" value="<?= (int)$S['auth']['login_max_attempts'] ?>">
+          <small class="field-hint">Wrong-password attempts, counted per phone/email, before that account is temporarily locked out.</small>
+        </label>
+        <label>Lockout window (minutes) <input type="number" min="1" max="1440" name="sys[auth][login_lockout_min]" value="<?= (int)$S['auth']['login_lockout_min'] ?>">
+          <small class="field-hint">How long a locked-out account must wait before it can try logging in again.</small>
+        </label>
+        <label>Idle session timeout (minutes) <input type="number" min="10" max="10080" name="sys[auth][session_timeout_min]" value="<?= (int)$S['auth']['session_timeout_min'] ?>">
+          <small class="field-hint">Logs a user out after this long with no activity — applies to everyone, including admins.</small>
+        </label>
+        <label>Minimum password length <input type="number" min="4" max="64" name="sys[auth][min_password_len]" value="<?= (int)$S['auth']['min_password_len'] ?>">
+          <small class="field-hint">Enforced on registration and password reset only — doesn't invalidate passwords already in use.</small>
+        </label>
       </div>
     </div>
 
@@ -791,10 +837,42 @@ $isSuper = $u['account_type'] === 'super_admin';
       <div class="check-row">
         <label class="check"><input type="checkbox" name="sys[notifications][sms_mirror]" <?= $chk('notifications.sms_mirror') ?>> Mirror important notifications to SMS</label>
       </div>
+      <p class="muted small">"Important" means order/payment status changes, verification decisions, and account sanctions/appeals — not every in-app notification. OTP codes always go by SMS regardless of this switch.</p>
+      <label>SMS provider
+        <select name="sys[notifications][sms_provider]">
+          <option value="log" <?= ($S['notifications']['sms_provider'] ?? 'log') === 'log' ? 'selected' : '' ?>>Local outbox only (no delivery)</option>
+          <option value="android_sms_gateway" <?= ($S['notifications']['sms_provider'] ?? '') === 'android_sms_gateway' ? 'selected' : '' ?>>SMS Gateway for Android (capcom6)</option>
+          <option value="generic_url" <?= ($S['notifications']['sms_provider'] ?? '') === 'generic_url' ? 'selected' : '' ?>>Generic URL gateway</option>
+        </select>
+      </label>
+      <h4>SMS Gateway for Android</h4>
+      <p class="muted small">Works with Cloud mode, a private server, or the phone's Local Server. Copy the Basic Auth credentials shown in the Android app. Local mode normally uses <code>http://PHONE_IP:8080/message</code>; Cloud mode uses the default endpoint below.</p>
+      <label>API endpoint
+        <input name="sys[notifications][android_sms_endpoint]" value="<?= e($S['notifications']['android_sms_endpoint'] ?? 'https://api.sms-gate.app/3rdparty/v1/message') ?>" placeholder="https://api.sms-gate.app/3rdparty/v1/message">
+      </label>
+      <div class="form-2col">
+        <label>Basic Auth username
+          <input name="sys[notifications][android_sms_username]" autocomplete="off" value="<?= e($S['notifications']['android_sms_username'] ?? '') ?>">
+        </label>
+        <label>Basic Auth password
+          <input type="password" name="sys[notifications][android_sms_password]" autocomplete="new-password" value="" placeholder="<?= !empty($S['notifications']['android_sms_password']) ? 'Configured — leave blank to keep it' : 'Enter gateway password' ?>">
+        </label>
+      </div>
+      <p class="muted small">The password stays server-side. Leave this field blank when saving later to keep the configured password.</p>
+      <div class="form-inline">
+        <label>Test recipient
+          <input name="test_sms_phone" inputmode="tel" placeholder="+2519…">
+        </label>
+        <button class="btn btn-outline" type="submit" name="do" value="sys_test_sms">Send test SMS</button>
+      </div>
+      <p class="muted small">Save settings first, then send the test. The test uses the currently saved provider configuration.</p>
+      <h4 class="section-gap">Generic URL gateway</h4>
       <label>SMS gateway URL — use <code>{phone}</code> and <code>{message}</code> placeholders; blank = log to <code>database/outbox.log</code> only
         <input name="sys[notifications][sms_gateway_url]" value="<?= e($S['notifications']['sms_gateway_url']) ?>" placeholder="https://sms.example/send?to={phone}&text={message}&token=…">
       </label>
-      <label>Email "from" address <input name="sys[notifications][email_from]" value="<?= e($S['notifications']['email_from']) ?>"></label>
+      <label>Email "from" address <input name="sys[notifications][email_from]" value="<?= e($S['notifications']['email_from']) ?>">
+        <small class="field-hint">What recipients see as the sender on password-reset and notification emails.</small>
+      </label>
       <p class="muted small">DEV mode is <?= DEV_MODE ? '<b>ON</b> — OTP codes are shown on screen and nothing is really sent' : 'off' ?> (toggle via <code>DEV_MODE</code> in config.php).</p>
       <h4 class="section-gap">📲 Firebase Cloud Messaging web push</h4>
       <p class="muted small">Blank = push disabled, logged to <code>database/outbox.log</code> only — same as the SMS gateway above. Paste your Firebase project's values below to go live; nothing else in the app needs to change.</p>
@@ -809,7 +887,9 @@ $isSuper = $u['account_type'] === 'super_admin';
 
     <div class="panel">
       <h3>🔎 SEO & analytics (§25)</h3>
-      <label>Default meta description <input name="sys[seo][meta_description]" value="<?= e($S['seo']['meta_description']) ?>"></label>
+      <label>Default meta description <input name="sys[seo][meta_description]" value="<?= e($S['seo']['meta_description']) ?>">
+        <small class="field-hint">Used by pages that don't set their own — shown in search results and link previews.</small>
+      </label>
       <label>Head snippet (analytics / site-verification tags, injected into every page's <code>&lt;head&gt;</code>)
         <textarea name="sys[seo][head_snippet]" rows="3" placeholder="<script>…</script>"><?= e($S['seo']['head_snippet']) ?></textarea>
       </label>
@@ -820,6 +900,7 @@ $isSuper = $u['account_type'] === 'super_admin';
 
 <?php elseif ($section === 'admins' && $isSuper): ?>
   <h1>👮 Admins & Roles</h1>
+  <p class="muted small"><b>Admin</b> can moderate listings/videos/reviews, handle reports, verification, orders, and payments. <b>Super admin</b> gets all of that plus System Settings, Ad Manager, this Admins & Roles page, and Backups.</p>
   <form method="post" class="panel form-inline">
     <?= csrf_field() ?><input type="hidden" name="do" value="admin_create">
     <input name="full_name" placeholder="Full name" required>

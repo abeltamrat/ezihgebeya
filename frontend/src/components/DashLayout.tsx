@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useSession } from '../auth/session';
+import { publicBase } from '../base';
+import { NotificationPopover } from './NotificationPopover';
 
 const VENDOR_ROLES = ['seller', 'manufacturer', 'importer', 'service_provider', 'supplier'];
 const ADMIN_ROLES = ['admin', 'super_admin'];
 
-interface NavItem { to: string; label: string; icon: string; group: string; end?: boolean }
+interface NavItem { to: string; label: string; icon: string; group: string; end?: boolean; external?: boolean }
 
 const VENDOR_NAV: NavItem[] = [
   { to: '/vendor', label: 'Dashboard', icon: 'home', group: 'Overview', end: true },
@@ -33,8 +35,20 @@ const CUSTOMER_NAV: NavItem[] = [
 ];
 
 const ADMIN_NAV: NavItem[] = [
-  { to: '/admin/health', label: 'Marketplace health', icon: 'chart', group: 'Operations', end: true },
-  { to: '/admin/monetization', label: 'Monetization', icon: 'spark', group: 'Operations' },
+  { to: '/admin', label: 'Dashboard', icon: 'home', group: 'Overview', external: true },
+  { to: '/admin/businesses', label: 'Businesses', icon: 'shop', group: 'Marketplace', external: true },
+  { to: '/admin/verification', label: 'Verification', icon: 'shield', group: 'Marketplace', external: true },
+  { to: '/admin/listings', label: 'Listings', icon: 'box', group: 'Marketplace', external: true },
+  { to: '/admin/videos', label: 'Videos', icon: 'video', group: 'Marketplace', external: true },
+  { to: '/admin/reviews', label: 'Reviews', icon: 'star', group: 'Moderation', external: true },
+  { to: '/admin/reports', label: 'Reports', icon: 'message', group: 'Moderation', external: true },
+  { to: '/admin/users', label: 'Users', icon: 'home', group: 'Administration', external: true },
+  { to: '/admin/orders', label: 'Orders', icon: 'order', group: 'Commerce', external: true },
+  { to: '/admin/payments', label: 'Payments', icon: 'cart', group: 'Commerce', external: true },
+  { to: '/admin/analytics', label: 'Analytics', icon: 'chart', group: 'Operations', external: true },
+  { to: '/admin/ads', label: 'Ad Manager', icon: 'spark', group: 'Operations', external: true },
+  { to: '/admin/settings', label: 'System Settings', icon: 'tool', group: 'System', external: true },
+  { to: '/admin/backups', label: 'Backups', icon: 'layers', group: 'System', external: true },
 ];
 
 const ICON_PATHS: Record<string, string> = {
@@ -70,7 +84,7 @@ export function DashLayout({ children }: { children: ReactNode }) {
         <nav className="app-shelllinks" aria-label="Account shortcuts">
           <a href={shell?.browse_url ?? '/products'}>Browse</a>
           <a className="btn btn-primary btn-sm" href={shell?.sell_url ?? '/register'}>{shell?.sell_label ?? 'Sell / Join'}</a>
-          {shell?.notifications_url ? <a href={shell.notifications_url}>Notifications{notificationCount ? <span className="mini-pill">{notificationCount}</span> : null}</a> : null}
+          {shell?.notifications_url ? <NotificationPopover initialCount={notificationCount} allUrl={shell.notifications_url} /> : null}
           {shell?.cart_enabled ? <a href={shell.cart_url}>Cart{cartCount ? <span className="mini-pill">{cartCount}</span> : null}</a> : null}
           {shell?.logout_url ? <a className="danger-link" href={shell.logout_url}>Log out</a> : null}
         </nav>
@@ -84,12 +98,17 @@ export function DashLayout({ children }: { children: ReactNode }) {
           {nav.map((item, index) => (
             <div className="dash-nav-item" key={item.to}>
               {index === 0 || nav[index - 1].group !== item.group ? <p className="dash-nav-group">{item.group}</p> : null}
-              <NavLink to={item.to} end={item.end} onClick={() => setNavOpen(false)} className={({ isActive }) => isActive ? 'current' : ''}>
-                <span className="dash-nav-icon"><NavIcon name={item.icon} /></span><span>{item.label}</span>
-              </NavLink>
+              {item.external ? (
+                <a href={`${publicBase}${item.to}`} onClick={() => setNavOpen(false)}>
+                  <span className="dash-nav-icon"><NavIcon name={item.icon} /></span><span>{item.label}</span>
+                </a>
+              ) : (
+                <NavLink to={item.to} end={item.end} onClick={() => setNavOpen(false)} className={({ isActive }) => isActive ? 'current' : ''}>
+                  <span className="dash-nav-icon"><NavIcon name={item.icon} /></span><span>{item.label}</span>
+                </NavLink>
+              )}
             </div>
           ))}
-          {user && ADMIN_ROLES.includes(user.account_type) ? <a href="/admin">PHP admin ↗</a> : null}
           {shell?.public_business_url ? <a href={shell.public_business_url}>Public shop ↗</a> : null}
         </aside>
         <main id="dashboard-content" className="dash-main" tabIndex={-1}>{children}</main>

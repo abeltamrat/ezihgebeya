@@ -19,10 +19,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($isOwner) {
         if (in_array($inq['status'], ['new', 'seen'], true)) q("UPDATE inquiries SET status = 'responded' WHERE id = ?", [$inq['id']]);
         notify($inq['customer_id'] ? (int)$inq['customer_id'] : null, 'vendor_reply',
-               $inq['business_name'] . ' replied to your inquiry', 'inquiries/' . $inq['id'], mb_substr($body, 0, 200), true);
+               $inq['business_name'] . ' replied to your inquiry', 'app/account/inquiries/' . $inq['id'], mb_substr($body, 0, 200), true);
     } else {
         notify((int)$inq['owner_id'], 'new_inquiry',
-               ($u['full_name'] ?: 'Customer') . ' sent a message on inquiry #' . $inq['id'], 'inquiries/' . $inq['id'], mb_substr($body, 0, 200));
+               ($u['full_name'] ?: 'Customer') . ' sent a message on inquiry #' . $inq['id'], 'app/vendor/inquiries/' . $inq['id'], mb_substr($body, 0, 200));
     }
     redirect('inquiries/' . $inq['id']);
 }

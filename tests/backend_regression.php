@@ -29,7 +29,11 @@ $assertSame(null, remembered_login_parse_cookie('not-a-token'), 'rejects a malfo
 $quickParts = remembered_login_parse_cookie(str_repeat('a', 32) . '.' . str_repeat('b', 64));
 $assertSame(str_repeat('a', 32), $quickParts['selector'] ?? null, 'accepts a strict quick-login selector');
 $assertSame(str_repeat('b', 64), $quickParts['validator'] ?? null, 'accepts a strict quick-login validator');
-$assertSame('/', remembered_login_cookie_path(), 'scopes a root deployment quick-login cookie to the site root');
+$expectedCookiePath = BASE_URL === '' ? '/' : rtrim(BASE_URL, '/') . '/';
+$assertSame($expectedCookiePath, remembered_login_cookie_path(), 'scopes the quick-login cookie to the configured site path');
+$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
+$assertSame(true, remembered_login_is_https(), 'marks proxy-terminated HTTPS quick-login cookies secure');
+unset($_SERVER['HTTP_X_FORWARDED_PROTO']);
 if ($failures) {
     foreach ($failures as $failure) fwrite(STDERR, "[FAIL] {$failure}\n");
     fwrite(STDERR, 'Backend regression: ' . count($failures) . " of {$tests} failed.\n");

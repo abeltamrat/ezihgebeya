@@ -43,7 +43,7 @@ unset($v);
 include __DIR__ . '/../views/layout_top.php';
 ?>
 <div class="container tiktok-toolbar">
-  <h1>▶ Watch & Buy</h1>
+  <h1><?= system_ui_icon('play', 'Watch') ?> Watch &amp; Buy</h1>
   <form method="get">
     <select name="city" onchange="this.form.submit()">
       <option value="">All cities</option>
@@ -63,14 +63,14 @@ include __DIR__ . '/../views/layout_top.php';
       <div class="tiktok-media"><?= video_embed_html($v) ?></div>
       <div class="tiktok-scrim"></div>
       <div class="tiktok-rail">
-        <button type="button" class="rail-btn" title="Share" onclick="ezihVideoEvent(<?= (int)$v['id'] ?>, 'share');ezihShare('<?= e($v['link_title']) ?>', '<?= e($v['link_href']) ?>')">🔗</button>
-        <a class="rail-btn" title="Visit shop" onclick="ezihVideoEvent(<?= (int)$v['id'] ?>, 'profile_click')" href="<?= url('businesses/' . e($v['b_slug'])) ?>">🏪</a>
+        <button type="button" class="rail-btn" title="Share" aria-label="Share video" onclick="ezihVideoEvent(<?= (int)$v['id'] ?>, 'share');ezihShare('<?= e($v['link_title']) ?>', '<?= e($v['link_href']) ?>')"><?= system_ui_icon('share', 'Share') ?></button>
+        <a class="rail-btn" title="Visit shop" aria-label="Visit shop" onclick="ezihVideoEvent(<?= (int)$v['id'] ?>, 'profile_click')" href="<?= url('businesses/' . e($v['b_slug'])) ?>"><?= system_ui_icon('shop', 'Shop') ?></a>
         <form method="post" action="<?= url('report') ?>" onsubmit="return confirm('Report this video?')">
           <?= csrf_field() ?>
           <input type="hidden" name="reported_type" value="video">
           <input type="hidden" name="reported_id" value="<?= $v['id'] ?>">
           <input type="hidden" name="reason" value="Reported from video feed">
-          <button type="submit" class="rail-btn" title="Report">🚩</button>
+          <button type="submit" class="rail-btn" title="Report" aria-label="Report video"><?= system_ui_icon('report', 'Report') ?></button>
         </form>
       </div>
       <div class="tiktok-info">

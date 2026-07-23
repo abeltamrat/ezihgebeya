@@ -39,16 +39,58 @@ function outbox_log(string $channel, string $to, string $message): void {
 
 /** Send an SMS: always logged to database/outbox.log; when a gateway URL is configured
  *  in admin → Settings → Notifications (and DEV_MODE is off), the gateway is called too. */
-function send_sms(string $phone, string $message): void {
+function send_android_sms_gateway(string $phone, string $message): bool {
+    $endpoint = trim((string)sys('notifications.android_sms_endpoint', ''));
+    $username = trim((string)sys('notifications.android_sms_username', ''));
+    $password = (string)sys('notifications.android_sms_password', '');
+    $parts = parse_url($endpoint);
+    if (!$parts || !in_array(strtolower((string)($parts['scheme'] ?? '')), ['http', 'https'], true)
+        || empty($parts['host']) || $username === '' || $password === '' || !function_exists('curl_init')) {
+        return false;
+    }
+    $payload = json_encode([
+        'textMessage' => ['text' => $message],
+        'phoneNumbers' => [$phone],
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($payload)) return false;
+    $ch = curl_init($endpoint);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+        CURLOPT_HTTPAUTH => CURLAUTH_BASIC,
+        CURLOPT_USERPWD => $username . ':' . $password,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT => 12,
+        CURLOPT_FOLLOWLOCATION => false,
+    ]);
+    $raw = curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    if ($status >= 200 && $status < 300) return true;
+    outbox_log('sms-error', $phone, 'Android SMS Gateway HTTP ' . $status . ($error !== '' ? ': ' . $error : '')
+        . (is_string($raw) && $raw !== '' ? ' — ' . mb_substr(strip_tags($raw), 0, 300) : ''));
+    return false;
+}
+
+function send_sms(string $phone, string $message): bool {
     outbox_log('sms', $phone, $message);
+    if (DEV_MODE) return false;
+    $provider = (string)sys('notifications.sms_provider', '');
+    if ($provider === 'android_sms_gateway') return send_android_sms_gateway($phone, $message);
     $gateway = (string)sys('notifications.sms_gateway_url', '');
-    if ($gateway === '' || DEV_MODE) return;
+    // Backward compatibility for installations that already configured the generic URL.
+    if ($provider === 'log' || ($provider !== 'generic_url' && $gateway === '')) return false;
+    if ($gateway === '') return false;
     $url = str_replace(['{phone}', '{message}'], [rawurlencode($phone), rawurlencode($message)], $gateway);
     try {
         $host = parse_url($gateway, PHP_URL_HOST);
-        if ($host) remote_text($url, [$host], 5);
+        return $host && remote_text($url, [$host], 5) !== null;
     } catch (Throwable $e) {
         outbox_log('sms-error', $phone, $e->getMessage());
+        return false;
     }
 }
 

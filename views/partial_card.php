@@ -32,7 +32,7 @@ $responseLabel = response_time_label(business_response_median_minutes($businessI
 $activityLabel = business_recent_activity_label($businessId);
 $cardLabel = trim($title . ($price ? ', ' . strip_tags($price) : '') . ', ' . (($item['subcity'] ? $item['subcity'] . ', ' : '') . ($item['city'] ?: 'Ethiopia')) . ', from ' . ($item['b_name'] ?? 'vendor'));
 ?>
-<a class="card reveal" href="<?= e($href) ?>" aria-label="<?= e($cardLabel) ?>">
+<a class="card reveal<?= !empty($item['is_featured']) ? ' card-featured' : '' ?>" href="<?= e($href) ?>" aria-label="<?= e($cardLabel) ?>">
   <div class="card-img">
     <?php if ($img): ?><img src="<?= e($img) ?>" alt="<?= e($title) ?>" loading="lazy">
     <?php else: ?><div class="card-placeholder" aria-hidden="true"><span class="icon-chip"><?= e($typeInitial) ?></span></div><?php endif; ?>

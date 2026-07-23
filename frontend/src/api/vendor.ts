@@ -73,6 +73,15 @@ export interface ListingMeta {
   subcities: Record<string, string[]>;
   can_add_listing: boolean;
   plan: string;
+  max_images_per_listing: number;
+  max_image_upload_mb: number;
+  ar_enabled: boolean;
+  ar_allowed: boolean;
+  ar_model_max_mb: number;
+  profile_location: {
+    city: string;
+    subcity: string;
+  };
 }
 
 export interface Listing {
@@ -116,6 +125,7 @@ export interface Listing {
   bulk_price: string | number | null;
   minimum_order_quantity: string | number | null;
   images: Array<{ id: number; url: string; is_primary: boolean }>;
+  ar_models: Array<{ type: 'glb' | 'usdz'; url: string }>;
 }
 
 export interface VendorInquiry {
@@ -152,6 +162,7 @@ export interface VendorOrder {
   customer: string;
   customer_id: number;
   status: string;
+  allowed_next_statuses: string[];
   delivery_option: string;
   delivery_address: string | null;
   city: string | null;
@@ -302,10 +313,16 @@ export const vendorApi = {
   update: (type: ListingType, id: number, body: Record<string, unknown>) =>
     api.put<{ ok: true; data: Listing }>(`/vendor/listings/${type}/${id}`, body),
   remove: (type: ListingType, id: number) => api.del<{ ok: true }>(`/vendor/listings/${type}/${id}`),
-  uploadImages: (type: ListingType, id: number, files: FileList) => {
+  uploadImages: (type: ListingType, id: number, files: FileList | readonly File[]) => {
     const form = new FormData();
     Array.from(files).forEach((f) => form.append('images[]', f));
     return api.post<{ ok: true; uploaded: number }>(`/vendor/listings/${type}/${id}/images`, form);
+  },
+  uploadModels: (id: number, glb: File | null, usdz: File | null) => {
+    const form = new FormData();
+    if (glb) form.set('model_glb', glb);
+    if (usdz) form.set('model_usdz', usdz);
+    return api.post<{ ok: true; uploaded: Array<'glb' | 'usdz'> }>(`/vendor/listings/product/${id}/models`, form);
   },
   setPrimaryImage: (id: number, imageId: number) =>
     api.post<{ ok: true }>(`/vendor/listings/product/${id}/images/${imageId}/primary`),

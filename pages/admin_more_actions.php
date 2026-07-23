@@ -281,6 +281,17 @@ if ($do === 'vr_review' && in_array($_POST['status'] ?? '', ['approved', 'reject
         flash('Repair/optimize failed: ' . $e->getMessage(), 'error');
     }
 
+} elseif ($do === 'sys_test_sms' && $isSuper) {
+    $phone = preg_replace('/[^\d+]/', '', $_POST['test_sms_phone'] ?? '');
+    if (strlen($phone) < 9) {
+        flash('Enter a valid test phone number.', 'error');
+    } elseif (DEV_MODE) {
+        flash('SMS delivery is disabled while DEV mode is on. Turn APP_DEV_MODE off to send a real test.', 'warning');
+    } elseif (send_sms($phone, site_name() . ' SMS Gateway test — your configuration is working.')) {
+        flash('Test SMS accepted by the configured gateway.');
+    } else {
+        flash('The gateway did not accept the test SMS. Check the endpoint, credentials, phone connectivity, and database/outbox.log.', 'error');
+    }
 } elseif ($do === 'sys_save' && $isSuper) {
     site_setting_set('system_settings', sanitize_system_settings($_POST['sys'] ?? []));
     flash('System settings saved — changes are live immediately.');

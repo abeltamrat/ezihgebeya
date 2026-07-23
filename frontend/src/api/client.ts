@@ -3,7 +3,7 @@
 // no separate token store. CSRF token is captured once from GET /me and echoed back on every
 // mutation as X-CSRF-Token, per api_v1.php's blanket CSRF check.
 
-const API_BASE = '/api/v1';
+import { apiBase as API_BASE } from '../base';
 
 let csrfToken: string | null = null;
 

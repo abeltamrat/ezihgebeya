@@ -2,27 +2,32 @@
 /** Listing detail page. Expects $type, $slug */
 $table = LISTING_TABLES[$type];
 $titleCol = listing_title_col($type);
+$u = auth();
 
 $item = row("SELECT l.*, b.business_name b_name, b.slug b_slug, b.verification_status b_verification, b.phone b_phone,
-        b.rating_average b_rating, b.rating_count b_rating_count, b.city b_city, b.created_at b_joined,
+        b.rating_average b_rating, b.rating_count b_rating_count, b.city b_city, b.created_at b_joined, b.user_id b_user_id,
         c.name c_name, c.icon c_icon
     FROM `$table` l JOIN businesses b ON b.id = l.business_id JOIN categories c ON c.id = l.category_id
-    WHERE l.slug = ? AND l.status = 'active' AND b.status = 'active'", [$slug]);
+    WHERE l.slug = ? AND b.status = 'active'", [$slug]);
 
-if (!$item) { http_response_code(404); $pageTitle = 'Not found'; include __DIR__ . '/../views/layout_top.php';
+$canPreview = $item && $u && ((int)$item['b_user_id'] === (int)$u['id'] || is_admin($u));
+$isPendingPreview = $item && $item['status'] === 'pending_review' && $canPreview;
+if (!$item || ($item['status'] !== 'active' && !$isPendingPreview)) { http_response_code(404); $pageTitle = 'Not found'; include __DIR__ . '/../views/layout_top.php';
     echo '<div class="container section"><div class="empty-state">Listing not found or not yet approved.</div></div>';
     include __DIR__ . '/../views/layout_bottom.php'; return; }
 
-q("UPDATE `$table` SET views_count = views_count + 1 WHERE id = ?", [$item['id']]);
-event_record('view', [
-    'listing_type' => $type,
-    'listing_id' => (int)$item['id'],
-    'business_id' => (int)$item['business_id'],
-    'category_id' => (int)$item['category_id'],
-    'source' => traffic_source_for_listing($type, (int)$item['id'], ($_GET['src'] ?? '') === 'ad' ? 'ad' : 'organic'),
-    'city' => $item['city'] ?: null,
-    'subcity' => $item['subcity'] ?: null,
-]);
+if (!$isPendingPreview) {
+    q("UPDATE `$table` SET views_count = views_count + 1 WHERE id = ?", [$item['id']]);
+    event_record('view', [
+        'listing_type' => $type,
+        'listing_id' => (int)$item['id'],
+        'business_id' => (int)$item['business_id'],
+        'category_id' => (int)$item['category_id'],
+        'source' => traffic_source_for_listing($type, (int)$item['id'], ($_GET['src'] ?? '') === 'ad' ? 'ad' : 'organic'),
+        'city' => $item['city'] ?: null,
+        'subcity' => $item['subcity'] ?: null,
+    ]);
+}
 $title = $item[$titleCol];
 $pageTitle = $title;
 $pageDesc = mb_substr(strip_tags($item['description'] ?? ''), 0, 150);
@@ -89,7 +94,6 @@ $reviews = rows("SELECT r.*, u.full_name FROM reviews r JOIN users u ON u.id = r
 
 $videos = rows("SELECT * FROM video_posts WHERE linked_type = ? AND linked_id = ? AND status = 'approved'", [$type, $item['id']]);
 
-$u = auth();
 $isFav = $u && $type === 'product' && val("SELECT COUNT(*) FROM favorites WHERE user_id = ? AND product_id = ?", [$u['id'], $item['id']]);
 
 $inquiryType = ['product' => 'product_inquiry', 'service' => 'service_quote_request', 'supply' => 'supply_order_request'][$type];
@@ -121,6 +125,12 @@ include __DIR__ . '/../views/layout_top.php';
 ?>
 <div class="container section detail-layout listing-detail-page">
   <div class="detail-main">
+    <?php if ($isPendingPreview): ?>
+    <div class="alert alert-warning" role="status">
+      <strong>Pending review</strong>
+      This is a private preview of your product. Customers cannot see it until an administrator approves it.
+    </div>
+    <?php endif; ?>
     <nav aria-label="breadcrumb" class="breadcrumbs text-sm mb-4">
       <ul>
         <li><a href="<?= url('') ?>">Home</a></li>
@@ -293,9 +303,9 @@ include __DIR__ . '/../views/layout_top.php';
       <div class="muted small">📍 <?= e($item['b_city'] ?: 'Ethiopia') ?> · joined <?= date('M Y', strtotime($item['b_joined'])) ?></div>
       <?php if ($item['b_phone']): ?>
         <?php if (business_phone_unlocked($u, (int)$item['business_id'])): ?>
-        <a class="btn btn-outline btn-block reveal-phone" href="tel:<?= e($item['b_phone']) ?>" data-phone="<?= e($item['b_phone']) ?>" aria-label="Call seller at <?= e($item['b_phone']) ?>">📞 Show phone number</a>
+        <a class="btn btn-outline btn-block reveal-phone" href="tel:<?= e($item['b_phone']) ?>" data-phone="<?= e($item['b_phone']) ?>" aria-label="Call seller at <?= e($item['b_phone']) ?>"><?= system_ui_icon('phone', 'Phone') ?> Show phone number</a>
         <?php else: ?>
-        <a class="btn btn-outline btn-block" href="#contact-seller" title="Message the seller first — the phone number unlocks once you've sent an inquiry">💬 Message to unlock phone</a>
+        <a class="btn btn-outline btn-block" href="<?= url('register?return=' . rawurlencode(current_internal_path())) ?>" title="Log in or create an account to show the seller's phone number"><?= system_ui_icon('unlock', 'Login') ?> Login to show phone</a>
         <?php endif; ?>
       <?php endif; ?>
       <a class="btn btn-ghost btn-block" href="<?= url('businesses/' . e($item['b_slug'])) ?>">Visit shop →</a>
@@ -385,7 +395,7 @@ include __DIR__ . '/../views/layout_top.php';
             <?php foreach (['phone', 'telegram', 'whatsapp', 'email', 'chat'] as $m): ?><option><?= $m ?></option><?php endforeach; ?>
           </select>
         </label>
-        <button class="btn btn-primary btn-block"><?= $type === 'service' ? 'Request Quote' : 'Send Inquiry' ?></button>
+        <button class="btn btn-primary btn-block"><?= system_ui_icon('send', 'Send') ?> <?= $type === 'service' ? 'Request Quote' : 'Send Inquiry' ?></button>
       </form>
     </div>
     <?php endif; /* inquiries feature */ ?>
@@ -404,7 +414,7 @@ include __DIR__ . '/../views/layout_top.php';
     <form method="post" action="<?= url('favorite') ?>">
       <?= csrf_field() ?>
       <input type="hidden" name="product_id" value="<?= $item['id'] ?>">
-      <button class="btn btn-ghost btn-block"><?= $isFav ? '❤️ Saved — remove' : '🤍 Save product' ?></button>
+      <button class="btn btn-ghost btn-block"><?= system_ui_icon($isFav ? 'heart' : 'heart-outline', 'Save') ?> <?= $isFav ? 'Saved — remove' : 'Save product' ?></button>
     </form>
     <?php endif; ?>
 
@@ -416,7 +426,7 @@ include __DIR__ . '/../views/layout_top.php';
       <input type="hidden" name="reported_type" value="<?= $type ?>">
       <input type="hidden" name="reported_id" value="<?= $item['id'] ?>">
       <details>
-        <summary>🚩 Report this listing</summary>
+        <summary><?= system_ui_icon('report', 'Report') ?> Report this listing</summary>
         <label>Reason
           <select name="reason">
             <?php foreach (['Fake or misleading', 'Wrong price', 'Offensive content', 'Duplicate listing', 'Scam suspicion', 'Other'] as $r): ?>
@@ -432,15 +442,15 @@ include __DIR__ . '/../views/layout_top.php';
 </div>
 <div class="detail-contact-bar" aria-label="Listing contact actions">
   <?php if (feature_enabled('inquiries')): ?>
-    <a class="btn btn-primary" href="#contact-seller" aria-label="Go to contact seller form">💬 Chat / Send inquiry</a>
+    <a class="btn btn-primary" href="#contact-seller" aria-label="Go to contact seller form"><?= system_ui_icon('chat', 'Chat') ?> Chat / Send inquiry</a>
   <?php else: ?>
     <a class="btn btn-primary" href="<?= url('businesses/' . e($item['b_slug'])) ?>">Visit shop</a>
   <?php endif; ?>
   <?php if ($item['b_phone']): ?>
     <?php if (business_phone_unlocked($u, (int)$item['business_id'])): ?>
-    <a class="btn btn-outline reveal-phone" href="tel:<?= e($item['b_phone']) ?>" data-phone="<?= e($item['b_phone']) ?>" aria-label="Call seller at <?= e($item['b_phone']) ?>">📞 Show phone</a>
+    <a class="btn btn-outline reveal-phone" href="tel:<?= e($item['b_phone']) ?>" data-phone="<?= e($item['b_phone']) ?>" aria-label="Call seller at <?= e($item['b_phone']) ?>"><?= system_ui_icon('phone', 'Phone') ?> Show phone</a>
     <?php else: ?>
-    <a class="btn btn-outline" href="#contact-seller">💬 Message to unlock phone</a>
+    <a class="btn btn-outline" href="<?= url('register?return=' . rawurlencode(current_internal_path())) ?>"><?= system_ui_icon('unlock', 'Login') ?> Login to show phone</a>
     <?php endif; ?>
   <?php endif; ?>
 </div>

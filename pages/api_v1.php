@@ -69,8 +69,8 @@ function v1_shell_state(?array $u): array {
         'cart_url' => url('cart'),
         'cart_count' => $cartEnabled ? cart_count() : 0,
         'cart_enabled' => $cartEnabled,
-        'sell_url' => url($u && is_vendor($u) ? 'app/vendor/listings/product/new' : 'register'),
-        'sell_label' => $u && is_vendor($u) ? 'Post listing' : 'Sell / Join',
+        'sell_url' => url($u && is_admin($u) ? 'admin' : ($u && is_vendor($u) ? 'app/vendor/listings/product/new' : 'register')),
+        'sell_label' => $u && is_admin($u) ? 'Admin dashboard' : ($u && is_vendor($u) ? 'Post listing' : 'Sell / Join'),
         'fcm_web_config' => $fcmWebConfig,
         // Runtime design tokens from the System UI Optimizer — the SPA applies these to
         // :root on load so admin re-theming reaches React screens, not just PHP pages.
@@ -85,7 +85,7 @@ function v1_shell_state(?array $u): array {
         ];
     }
 
-    $accountPath = is_admin($u) ? 'app/admin/health' : (is_vendor($u) ? 'app/vendor' : 'account');
+    $accountPath = is_admin($u) ? 'admin' : (is_vendor($u) ? 'app/vendor' : 'account');
     $biz = is_vendor($u) ? my_business($u) : null;
 
     return $shell + [
@@ -408,7 +408,7 @@ if ($r0 === 'account' && ($apiSeg[1] ?? '') === 'inquiries') {
             if ($text === '') api_validation_error(['body' => 'Write a message first.']);
             q("INSERT INTO inquiry_messages (inquiry_id, sender_id, body) VALUES (?,?,?)", [$iid, $u['id'], mb_substr($text, 0, 3000)]);
             notify((int)$inq['owner_id'], 'new_inquiry',
-                ($u['full_name'] ?: 'Customer') . ' sent a message on inquiry #' . $iid, 'inquiries/' . $iid, mb_substr($text, 0, 200));
+                ($u['full_name'] ?: 'Customer') . ' sent a message on inquiry #' . $iid, 'app/vendor/inquiries/' . $iid, mb_substr($text, 0, 200));
             api_out(['ok' => true], 201);
         }
     }
@@ -425,7 +425,7 @@ if ($r0 === 'account' && ($apiSeg[1] ?? '') === 'notifications') {
         'type' => $n['type'],
         'title' => $n['title'],
         'body' => $n['body'],
-        'url' => $n['url'] ? url($n['url']) : null,
+        'url' => notification_destination($u, $n['url']),
         'read_at' => $n['read_at'],
         'created_at' => $n['created_at'],
         'unread' => !$n['read_at'],
@@ -562,6 +562,7 @@ if ($r0 === 'checkout') {
         $method_ = array_key_exists($body['payment_method'] ?? '', $enabledMethods) ? $body['payment_method'] : array_key_first($enabledMethods);
 
         $fields = [];
+        if (!$enabledMethods) $fields['payment_method'] = ['Checkout is temporarily unavailable because no payment method is enabled.'];
         if (strlen($phone) < 9) $fields['phone'] = ['Phone number required.'];
         if ($delivery === 'delivery' && ($address === '' || !isset(CITIES[$city]))) $fields['delivery_address'] = ['Delivery address and city required.'];
         if ($fields) api_validation_error($fields);
@@ -569,6 +570,7 @@ if ($r0 === 'checkout') {
         $orderNums = [];
         try {
             db()->beginTransaction();
+            reserve_order_inventory($groups);
             foreach ($groups as $g) {
                 $num = order_number();
                 $trafficSource = 'organic';
@@ -578,13 +580,13 @@ if ($r0 === 'checkout') {
                     if ($itemSource === 'promoted') $trafficSource = 'promoted';
                 }
                 if (db_column_exists('orders', 'traffic_source')) {
-                    q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, traffic_source)
-                       VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?)",
+                    q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, traffic_source, inventory_committed)
+                       VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?,1)",
                       [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
                        $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method_, $trafficSource]);
                 } else {
-                    q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method)
-                       VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?)",
+                    q("INSERT INTO orders (order_number, customer_id, business_id, status, delivery_option, delivery_address, city, subcity, phone, note, subtotal, total, payment_method, inventory_committed)
+                       VALUES (?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,1)",
                       [$num, $u['id'], $g['business_id'], $delivery, $address ?: null, $city ?: null, $subcity ?: null,
                        $phone, $note ?: null, $g['subtotal'], $g['subtotal'], $method_]);
                 }
@@ -609,7 +611,7 @@ if ($r0 === 'checkout') {
             api_out(['ok' => true, 'order_numbers' => $orderNums, 'requires_proof' => $method_ !== 'cash_on_delivery']);
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
-            api_error('We could not place your order. Please try again.', 500);
+            api_error($e instanceof RuntimeException ? $e->getMessage() : 'We could not place your order. Please try again.', $e instanceof RuntimeException ? 409 : 500);
         }
     }
 
@@ -644,8 +646,8 @@ if ($r0 === 'account' && ($apiSeg[1] ?? '') === 'orders') {
                 'id' => (int)$p['id'], 'amount' => (float)$p['amount'], 'payment_method' => $p['payment_method'],
                 'reference_number' => $p['reference_number'], 'status' => $p['status'], 'created_at' => $p['created_at'],
             ], $pays),
-            'can_submit_payment' => $o['payment_method'] !== 'cash_on_delivery' && !$hasLivePayment && !in_array($o['status'], ['cancelled', 'completed'], true),
-            'can_cancel' => in_array($o['status'], ['pending', 'confirmed'], true),
+            'can_submit_payment' => $o['payment_method'] !== 'cash_on_delivery' && !$hasLivePayment && in_array($o['status'], ['pending', 'confirmed'], true),
+            'can_cancel' => in_array($o['status'], ['pending', 'confirmed'], true) && !$hasLivePayment,
         ];
     };
 
@@ -662,14 +664,21 @@ if ($r0 === 'account' && ($apiSeg[1] ?? '') === 'orders') {
 
         if ($method === 'POST' && $sub === 'cancel') {
             if (!in_array($order['status'], ['pending', 'confirmed'], true)) api_error('This order can no longer be cancelled.', 409);
-            q("UPDATE orders SET status = 'cancelled' WHERE id = ?", [$oid]);
+            if (val("SELECT COUNT(*) FROM payments WHERE order_id = ? AND status IN ('pending','confirmed')", [$oid])) {
+                api_error('This order has a submitted payment. Contact the seller before cancelling.', 409);
+            }
+            if (!transition_order_status($order, 'cancelled', (int)$u['id'], 'Cancelled by customer')) {
+                api_error('This order can no longer be cancelled.', 409);
+            }
             $order['status'] = 'cancelled';
             api_out(['ok' => true, 'order' => $orderOut($order)]);
         }
 
         if ($method === 'POST' && $sub === 'pay') {
+            if (!in_array($order['status'], ['pending', 'confirmed'], true)) api_error('This order is not awaiting payment.', 409);
             $ref = trim((string)($body['reference_number'] ?? ''));
             $methods = payment_methods(false);
+            if (!$methods) api_error('No electronic payment method is currently available.', 409);
             $method_ = array_key_exists($body['payment_method'] ?? '', $methods) ? $body['payment_method'] : array_key_first($methods);
             $proof = upload_image($_FILES['proof_image'] ?? [], 'payments', true);
             // Same server-side duplicate guard as account_orders.php: the client only hides the
@@ -1062,6 +1071,12 @@ function v1_listing_out(string $type, array $l): array {
             ? array_map(fn($m) => ['id' => (int)$m['id'], 'url' => img_url($m['file_url']), 'is_primary' => (bool)$m['is_primary']],
                 rows("SELECT id, file_url, is_primary FROM product_media WHERE product_id = ? AND media_type = 'image' ORDER BY is_primary DESC, id", [$l['id']]))
             : ($l['image'] ? [['id' => 0, 'url' => img_url($l['image']), 'is_primary' => true]] : []),
+        'ar_models' => $type === 'product'
+            ? array_map(fn($m) => [
+                'type' => $m['media_type'] === 'model_3d_glb' ? 'glb' : 'usdz',
+                'url' => img_url($m['file_url']),
+            ], rows("SELECT media_type, file_url FROM product_media WHERE product_id = ? AND media_type IN ('model_3d_glb','model_3d_usdz') ORDER BY id", [$l['id']]))
+            : [],
     ];
 }
 
@@ -1246,7 +1261,7 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'inquiries') {
             q("INSERT INTO inquiry_messages (inquiry_id, sender_id, body) VALUES (?,?,?)", [$iid, $u['id'], mb_substr($text, 0, 3000)]);
             if (in_array($inq['status'], ['new', 'seen'], true)) q("UPDATE inquiries SET status = 'responded' WHERE id = ?", [$iid]);
             notify($inq['customer_id'] ? (int)$inq['customer_id'] : null, 'vendor_reply',
-                $biz['business_name'] . ' replied to your inquiry', 'inquiries/' . $iid, mb_substr($text, 0, 200), true);
+                $biz['business_name'] . ' replied to your inquiry', 'app/account/inquiries/' . $iid, mb_substr($text, 0, 200), true);
             api_out(['ok' => true], 201);
         }
     }
@@ -1271,6 +1286,7 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'orders') {
             'customer' => $o['customer'],
             'customer_id' => (int)$o['customer_id'],
             'status' => $o['status'],
+            'allowed_next_statuses' => order_status_transitions((string)$o['status']),
             'delivery_option' => $o['delivery_option'],
             'delivery_address' => $o['delivery_address'],
             'city' => $o['city'],
@@ -1323,7 +1339,9 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'orders') {
         if (!in_array($status, $flow, true)) api_validation_error(['status' => 'Invalid status.']);
         $order = v1_require_owner(row("SELECT * FROM orders WHERE id = ?", [$oid]), 'business_id', $biz['id']);
         if ($order['status'] !== $status) {
-            q("UPDATE orders SET status = ? WHERE id = ?", [$status, $oid]);
+            if (!transition_order_status($order, $status, (int)$u['id'], 'Updated by vendor')) {
+                api_error('That status change is not allowed.', 409);
+            }
             notify((int)$order['customer_id'], 'order_status_changed',
                 'Order ' . $order['order_number'] . ' is now ' . str_replace('_', ' ', $status), 'account/orders', '', true);
         }
@@ -1334,12 +1352,16 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'orders') {
         $paymentId = ctype_digit($apiSeg[4] ?? '') ? (int)$apiSeg[4] : 0;
         $paymentAction = $apiSeg[5] ?? '';
         if ($paymentId !== 0 && $paymentAction === 'confirm') {
-            $payment = row("SELECT p.* FROM payments p JOIN orders o ON o.id = p.order_id
+            $payment = row("SELECT p.*, o.status order_status FROM payments p JOIN orders o ON o.id = p.order_id
                 WHERE p.id = ? AND p.order_id = ? AND o.business_id = ?", [$paymentId, $oid, $biz['id']]);
             if (!$payment) api_error('Payment not found.', 404);
             if ($payment['status'] !== 'pending') api_error('Only pending payments can be confirmed.', 409);
+            if (!in_array($payment['order_status'], ['pending', 'confirmed'], true)) api_error('This order is not awaiting payment confirmation.', 409);
             q("UPDATE payments SET status = 'confirmed', confirmed_by = ? WHERE id = ?", [$u['id'], $paymentId]);
-            q("UPDATE orders SET status = 'deposit_paid' WHERE id = ? AND status IN ('pending','confirmed')", [$payment['order_id']]);
+            $paymentOrder = row("SELECT * FROM orders WHERE id = ?", [$payment['order_id']]);
+            if ($paymentOrder && in_array($paymentOrder['status'], ['pending', 'confirmed'], true)) {
+                transition_order_status($paymentOrder, 'deposit_paid', (int)$u['id'], 'Payment confirmed by vendor');
+            }
             notify((int)$payment['payer_id'], 'payment_received', 'Your payment of ' . money($payment['amount']) . ' was confirmed', 'account/orders');
             api_out(['ok' => true]);
         }
@@ -1866,6 +1888,15 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'listings') {
             'cities' => array_keys(CITIES), 'subcities' => CITIES,
             'can_add_listing' => can_add_listing((int)$biz['id']),
             'plan' => current_plan((int)$biz['id']),
+            'max_images_per_listing' => (int)sys('limits.max_images_per_listing', 6),
+            'max_image_upload_mb' => upload_limit_mb(),
+            'ar_enabled' => feature_enabled('ar'),
+            'ar_allowed' => feature_enabled('ar') && current_plan((int)$biz['id']) === 'premium',
+            'ar_model_max_mb' => (int)sys('limits.ar_model_max_mb', 10),
+            'profile_location' => [
+                'city' => trim((string)($biz['city'] ?? '')),
+                'subcity' => trim((string)($biz['subcity'] ?? '')),
+            ],
         ]);
     }
 
@@ -1905,6 +1936,29 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'listings') {
         v1_require_owner(row("SELECT * FROM `$table` WHERE id = ?", [$lid]), 'business_id', $biz['id']);
         q("UPDATE `$table` SET status = 'deleted' WHERE id = ?", [$lid]);
         api_out(['ok' => true]);
+    }
+
+    // ---------- product 3D/AR model upload ----------
+    if ($sub === 'models' && $lid !== 0) {
+        if ($ltype !== 'product') api_error('AR models are only available for products.', 422);
+        v1_require_owner(row("SELECT * FROM products WHERE id = ?", [$lid]), 'business_id', $biz['id']);
+        if (!feature_enabled('ar')) api_error('3D/AR previews are currently disabled.', 403);
+        if (current_plan((int)$biz['id']) !== 'premium') api_error('3D/AR product previews require the Premium plan.', 403);
+        if ($method !== 'POST') api_error('Unknown endpoint.', 404);
+
+        $uploaded = [];
+        foreach (['model_glb' => ['glb', 'model_3d_glb'], 'model_usdz' => ['usdz', 'model_3d_usdz']] as $field => [$ext, $mediaType]) {
+            if (($_FILES[$field]['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) continue;
+            $path = upload_model($_FILES[$field], $ext);
+            if (!$path) api_error("Could not upload the .$ext model. Check its format and size.", 422);
+            $old = val("SELECT file_url FROM product_media WHERE product_id = ? AND media_type = ?", [$lid, $mediaType]);
+            q("DELETE FROM product_media WHERE product_id = ? AND media_type = ?", [$lid, $mediaType]);
+            q("INSERT INTO product_media (product_id, media_type, file_url) VALUES (?,?,?)", [$lid, $mediaType, $path]);
+            purge_upload_file($old);
+            $uploaded[] = $ext;
+        }
+        if (!$uploaded) api_error('Select a .glb or .usdz model to upload.', 422);
+        api_out(['ok' => true, 'uploaded' => $uploaded]);
     }
 
     // ---------- product media management ----------
@@ -1971,8 +2025,12 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'listings') {
 
         // POST /vendor/listings/product/{id}/images (multipart upload)
         if ($method !== 'POST' || $mediaId !== 0) api_error('Unknown endpoint.', 404);
+        $maxImages = (int)sys('limits.max_images_per_listing', 6);
+        $existingImages = (int)val("SELECT COUNT(*) FROM product_media WHERE product_id = ? AND media_type = 'image'", [$lid]);
+        $remainingImages = max(0, $maxImages - $existingImages);
+        if ($remainingImages === 0) api_error("This product already has the maximum of $maxImages images.", 422);
         $uploaded = [];
-        foreach (array_slice($_FILES['images']['name'] ?? [], 0, (int)sys('limits.max_images_per_listing', 6), true) as $k => $n) {
+        foreach (array_slice($_FILES['images']['name'] ?? [], 0, $remainingImages, true) as $k => $n) {
             if (!$n) continue;
             $f = ['name' => $n, 'type' => $_FILES['images']['type'][$k], 'tmp_name' => $_FILES['images']['tmp_name'][$k],
                   'error' => $_FILES['images']['error'][$k], 'size' => $_FILES['images']['size'][$k]];
@@ -1998,43 +2056,76 @@ function v1_save_listing(string $ltype, string $table, string $titleCol, int $bi
     $title = trim((string)($body['title'] ?? ''));
     $catId = (int)($body['category_id'] ?? 0);
     $desc = trim((string)($body['description'] ?? ''));
-    $city = (string)($body['city'] ?? '');
-    $subcity = trim((string)($body['subcity'] ?? ''));
+    if ($ltype === 'product') {
+        // Product discovery location is owned by the vendor profile, never by the
+        // request body. This prevents clients from spoofing a different location.
+        $profileLocation = row("SELECT city, subcity FROM businesses WHERE id = ?", [$bizId]);
+        $city = trim((string)($profileLocation['city'] ?? ''));
+        $subcity = trim((string)($profileLocation['subcity'] ?? ''));
+    } else {
+        $city = (string)($body['city'] ?? '');
+        $subcity = trim((string)($body['subcity'] ?? ''));
+    }
 
     $errors = [];
     if (mb_strlen($title) < 3) $errors[] = 'Title is required (min 3 characters).';
     if (!in_array($catId, array_column($cats, 'id'))) $errors[] = 'Select a valid category.';
-    if (!isset(CITIES[$city])) $errors[] = 'Select a valid city.';
+    if (!isset(CITIES[$city])) {
+        $errors[] = $ltype === 'product'
+            ? 'Add a valid city to your business profile before creating products.'
+            : 'Select a valid city.';
+    }
+
+    // Every field below falls back to the existing row's value when the caller's body omits
+    // the key, so a partial update (e.g. a form that only touched the description) can never
+    // silently blank out price/stock/attributes/etc. Omitted = unchanged; present-but-empty =
+    // an explicit clear (needed for price on 'quote_required' listings). $item is null on
+    // create, where every fallback default applies instead.
+    $str   = fn(string $k, string $default = '') => array_key_exists($k, $body) ? trim((string)$body[$k]) : (string)($item[$k] ?? $default);
+    $num   = fn(string $k) => array_key_exists($k, $body) ? ((float)($body[$k] ?? 0) ?: null) : (isset($item[$k]) ? (float)$item[$k] : null);
+    $int   = fn(string $k, int $default = 0) => array_key_exists($k, $body) ? (int)($body[$k] ?? $default) : (int)($item[$k] ?? $default);
+    $numZ  = fn(string $k, float $default = 0) => array_key_exists($k, $body) ? (float)($body[$k] ?? $default) : (float)($item[$k] ?? $default);
+    $flag  = fn(string $k) => array_key_exists($k, $body) ? (!empty($body[$k]) ? 1 : 0) : (int)($item[$k] ?? 0);
+    $minQty = array_key_exists('minimum_order_quantity', $body)
+        ? ((float)($body['minimum_order_quantity'] ?? 1) ?: 1)
+        : ((float)($item['minimum_order_quantity'] ?? 1) ?: 1);
 
     $attrDefs = $catId ? category_attributes($catId) : [];
-    // The API receives attributes as a plain {key: value} object, not the PHP form's attr[key] shape.
-    [$attrValues, $attrErrors] = collect_attribute_input($attrDefs, ['attr' => array_map(
-        fn($v) => is_bool($v) ? ($v ? '1' : null) : $v, (array)($body['attributes'] ?? [])
-    )]);
-    $errors = array_merge($errors, $attrErrors);
+    if ($item && !array_key_exists('attributes', $body)) {
+        // Partial update didn't touch attributes — keep the stored JSON as-is rather than
+        // re-validating against an empty input (which would wipe them, or fail required checks
+        // for attributes the vendor already filled in during creation).
+        $attrJson = $item['attributes'];
+    } else {
+        // The API receives attributes as a plain {key: value} object, not the PHP form's attr[key] shape.
+        [$attrValues, $attrErrors] = collect_attribute_input($attrDefs, ['attr' => array_map(
+            fn($v) => is_bool($v) ? ($v ? '1' : null) : $v, (array)($body['attributes'] ?? [])
+        )]);
+        $errors = array_merge($errors, $attrErrors);
+        $attrJson = encode_attributes($attrValues);
+    }
     if ($errors) return [null, $errors];
 
-    $attrJson = encode_attributes($attrValues);
     $slug = $item ? $item['slug'] : slugify($title . '-' . $city, $table);
     if ($ltype === 'product') {
-        $data = [$catId, $title, $desc, (string)($body['product_type'] ?? 'ready_made'), (string)($body['condition_type'] ?? 'new'),
-            (float)($body['price'] ?? 0) ?: null, (float)($body['discount_price'] ?? 0) ?: null,
-            !empty($body['is_negotiable']) ? 1 : 0, (int)($body['stock_quantity'] ?? 0),
-            trim((string)($body['material'] ?? '')), trim((string)($body['brand'] ?? '')), trim((string)($body['color'] ?? '')),
-            trim((string)($body['dimensions'] ?? '')), trim((string)($body['warranty'] ?? '')), $attrJson,
-            !empty($body['delivery_available']) ? 1 : 0, !empty($body['installation_available']) ? 1 : 0,
-            !empty($body['customization_available']) ? 1 : 0, $city, $subcity];
+        $data = [$catId, $title, $desc, $str('product_type', 'ready_made'), $str('condition_type', 'new'),
+            $num('price'), $num('discount_price'),
+            $flag('is_negotiable'), $int('stock_quantity'),
+            $str('material'), $str('brand'), $str('color'),
+            $str('dimensions'), $str('warranty'), $attrJson,
+            $flag('delivery_available'), $flag('installation_available'),
+            $flag('customization_available'), $city, $subcity];
         $cols = "category_id=?, title=?, description=?, product_type=?, condition_type=?, price=?, discount_price=?, is_negotiable=?, stock_quantity=?, material=?, brand=?, color=?, dimensions=?, warranty=?, attributes=?, delivery_available=?, installation_available=?, customization_available=?, city=?, subcity=?";
     } elseif ($ltype === 'service') {
-        $data = [$catId, $title, $desc, (int)($body['experience_years'] ?? 0),
-            (string)($body['price_type'] ?? 'quote_required'), (float)($body['starting_price'] ?? 0) ?: null, $attrJson, $city, $subcity];
+        $data = [$catId, $title, $desc, $int('experience_years'),
+            $str('price_type', 'quote_required'), $num('starting_price'), $attrJson, $city, $subcity];
         $cols = "category_id=?, title=?, description=?, experience_years=?, price_type=?, starting_price=?, attributes=?, city=?, subcity=?";
     } else {
-        $data = [$catId, $title, $desc, trim((string)($body['brand'] ?? '')), trim((string)($body['grade'] ?? '')),
-            trim((string)($body['size'] ?? '')), trim((string)($body['thickness'] ?? '')), (string)($body['unit_of_measurement'] ?? 'piece'),
-            (float)($body['price_per_unit'] ?? 0) ?: null, (float)($body['bulk_price'] ?? 0) ?: null,
-            (float)($body['minimum_order_quantity'] ?? 1) ?: 1, (float)($body['stock_quantity'] ?? 0), $attrJson,
-            !empty($body['delivery_available']) ? 1 : 0, $city, $subcity];
+        $data = [$catId, $title, $desc, $str('brand'), $str('grade'),
+            $str('size'), $str('thickness'), $str('unit_of_measurement', 'piece'),
+            $num('price_per_unit'), $num('bulk_price'),
+            $minQty, $numZ('stock_quantity'), $attrJson,
+            $flag('delivery_available'), $city, $subcity];
         $cols = "category_id=?, name=?, description=?, brand=?, grade=?, size=?, thickness=?, unit_of_measurement=?, price_per_unit=?, bulk_price=?, minimum_order_quantity=?, stock_quantity=?, attributes=?, delivery_available=?, city=?, subcity=?";
     }
 

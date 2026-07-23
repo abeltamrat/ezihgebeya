@@ -82,7 +82,7 @@ include __DIR__ . '/../views/layout_top.php';
         <?php if (business_phone_unlocked($u, (int)$biz['id'])): ?>
         <a class="btn btn-primary" href="tel:<?= e($biz['phone']) ?>">📞 Call</a>
         <?php else: ?>
-        <a class="btn btn-primary" href="#listings" title="Message the seller on a listing first — the phone number unlocks once you've sent an inquiry">💬 Message a listing to unlock phone</a>
+        <a class="btn btn-primary" href="<?= url('register?return=' . rawurlencode(current_internal_path())) ?>" title="Log in or create an account to show the seller's phone number"><?= system_ui_icon('unlock', 'Login') ?> Login to show phone</a>
         <?php endif; ?>
       <?php endif; ?>
     </div>

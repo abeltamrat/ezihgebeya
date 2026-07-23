@@ -42,8 +42,9 @@ if ($qStr !== '') {
     $matchString = implode(' ', $searchTerms); // natural-language MATCH ORs individual words
     [$likeTitle, $likeTitleParams] = search_like_clause("l.`$titleCol`", $searchTerms);
     [$likeDesc, $likeDescParams] = search_like_clause('l.description', $searchTerms);
-    $where[] = "(MATCH(l.`$titleCol`, l.description) AGAINST (?) OR $likeTitle OR $likeDesc)";
-    array_push($params, $matchString, ...$likeTitleParams, ...$likeDescParams);
+    [$likeCategory, $likeCategoryParams] = search_like_clause('c.name', $searchTerms);
+    $where[] = "(MATCH(l.`$titleCol`, l.description) AGAINST (?) OR $likeTitle OR $likeDesc OR $likeCategory)";
+    array_push($params, $matchString, ...$likeTitleParams, ...$likeDescParams, ...$likeCategoryParams);
     $ftScore = "MATCH(l.`$titleCol`, l.description) AGAINST (" . db()->quote($matchString) . ") * 4";
 }
 // Dynamic per-category attribute filters (admin-managed under Admin → Categories → Attributes).
@@ -499,7 +500,7 @@ $browseHtmxAttrs = 'hx-target="#browse-page" hx-select="#browse-page" hx-swap="o
           <p class="muted small">We’ll notify you when new <?= e(strtolower($labels[$type])) ?> match: <?= e($savedSearchLabel) ?>.</p>
         </div>
         <?php if (!$viewer): ?>
-          <a class="btn btn-outline btn-sm" href="<?= url('login') ?>">Log in to save</a>
+          <a class="btn btn-outline btn-sm" href="<?= url('login') ?>"><?= system_ui_icon('login', 'Log in') ?> Log in to save</a>
         <?php elseif (!$savedSearchAvailable): ?>
           <button class="btn btn-outline btn-sm" disabled>Run DB upgrade first</button>
         <?php elseif ($savedSearchRow): ?>

@@ -48,8 +48,9 @@ function saved_search_build_match(string $type, string $queryString, ?string $si
         $matchString = implode(' ', $terms);
         [$likeTitle, $likeTitleParams] = search_like_clause("l.`$titleCol`", $terms);
         [$likeDesc, $likeDescParams] = search_like_clause('l.description', $terms);
-        $where[] = "(MATCH(l.`$titleCol`, l.description) AGAINST (?) OR $likeTitle OR $likeDesc)";
-        array_push($params, $matchString, ...$likeTitleParams, ...$likeDescParams);
+        [$likeCategory, $likeCategoryParams] = search_like_clause('c.name', $terms);
+        $where[] = "(MATCH(l.`$titleCol`, l.description) AGAINST (?) OR $likeTitle OR $likeDesc OR $likeCategory)";
+        array_push($params, $matchString, ...$likeTitleParams, ...$likeDescParams, ...$likeCategoryParams);
     }
     $catSlug = trim((string)($query['category'] ?? ''));
     if ($catSlug !== '') { $where[] = "c.slug = ?"; $params[] = $catSlug; }

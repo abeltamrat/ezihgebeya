@@ -86,7 +86,7 @@
       <?php $footerUi = system_ui_config(); ?>
       <div class="logo"><span class="logo-mark"><?= e($footerUi['logo_mark']) ?></span> <span><?= e($footerUi['logo_text']) ?></span></div>
       <p class="muted"><?= e(site_tagline()) ?>. Find trusted furniture sellers, finishing professionals and material suppliers near you.</p>
-      <?php if (sys('general.contact_phone')): ?><p class="muted small">📞 <a href="tel:<?= e(sys('general.contact_phone')) ?>"><?= e(sys('general.contact_phone')) ?></a></p><?php endif; ?>
+      <?php if (sys('general.contact_phone')): ?><p class="muted small footer-phone"><?= system_ui_icon('phone', 'Phone') ?> <a href="tel:<?= e(sys('general.contact_phone')) ?>"><?= e(sys('general.contact_phone')) ?></a></p><?php endif; ?>
     </div>
     <div>
       <h4>Marketplace</h4>
@@ -129,11 +129,11 @@ $mnSellLabel = is_vendor($mnUser) ? 'Post' : 'Sell';
 <nav class="mobile-nav" aria-label="Mobile">
   <a href="<?= url('') ?>" class="<?= $mnCur('') ?>"><span class="mn-icon"><?= system_ui_icon('home', 'Home') ?></span>Home</a>
   <a href="<?= url('products') ?>" class="<?= $mnCur('products') ?>"><span class="mn-icon"><?= system_ui_icon('shop', 'Shop') ?></span>Shop</a>
-  <a href="<?= url($mnSell) ?>" class="mobile-sell <?= $mnCur($mnSell) ?>"><span class="mn-icon">+</span><?= e($mnSellLabel) ?></a>
+  <a href="<?= url($mnSell) ?>" class="mobile-sell <?= $mnCur($mnSell) ?>"><span class="mn-icon"><?= system_ui_icon('plus', 'Sell') ?></span><?= e($mnSellLabel) ?></a>
   <?php if (feature_enabled('videos')): ?><a href="<?= url('videos') ?>" class="<?= $mnCur('videos') ?>"><span class="mn-icon"><?= system_ui_icon('play', 'Videos') ?></span>Videos</a><?php endif; ?>
   <?php if (feature_enabled('cart')): ?><a href="<?= url('cart') ?>" class="<?= $mnCur('cart') ?>"><span class="mn-icon"><?= system_ui_icon('cart', 'Cart') ?></span>Cart<?= cart_count() ? ' (' . cart_count() . ')' : '' ?></a><?php endif; ?>
   <a href="<?= url($mnAccount) ?>" class="<?= $mnCur($mnAccount) ?>"><span class="mn-icon"><?= system_ui_icon('user', 'Account') ?></span>Account</a>
 </nav>
-<script src="<?= url('assets/js/app.js') ?>"></script>
+<script src="<?= asset_url('assets/js/app.js') ?>"></script>
 </body>
 </html>

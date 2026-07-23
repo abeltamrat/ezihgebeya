@@ -17,12 +17,14 @@ if ($qStr !== '') {
     foreach (LISTING_TABLES as $t => $table) {
         $col = listing_title_col($t);
         [$likeCol, $likeColParams] = search_like_clause("l.`$col`", $searchTerms);
+        [$likeDesc, $likeDescParams] = search_like_clause('l.description', $searchTerms);
+        [$likeCategory, $likeCategoryParams] = search_like_clause('c.name', $searchTerms);
         $results[$t] = rows("SELECT l.*, b.business_name b_name, b.verification_status b_verification, c.name c_name, c.icon c_icon
             FROM `$table` l JOIN businesses b ON b.id = l.business_id JOIN categories c ON c.id = l.category_id
             WHERE l.status = 'active' AND b.status = 'active'
-              AND (MATCH(l.`$col`, l.description) AGAINST (?) OR $likeCol)
+              AND (MATCH(l.`$col`, l.description) AGAINST (?) OR $likeCol OR $likeDesc OR $likeCategory)
             ORDER BY MATCH(l.`$col`, l.description) AGAINST (?) DESC, $boostRank DESC, l.is_featured DESC LIMIT 8",
-            [$matchString, ...$likeColParams, $matchString]);
+            [$matchString, ...$likeColParams, ...$likeDescParams, ...$likeCategoryParams, $matchString]);
     }
     [$likeName, $likeNameParams] = search_like_clause('business_name', $searchTerms);
     [$likeDesc, $likeDescParams] = search_like_clause('description', $searchTerms);
@@ -36,7 +38,8 @@ if ($qStr !== '') {
         JOIN businesses b ON b.id = v.business_id
         WHERE v.status = 'approved' AND b.status = 'active' AND ($likeVTitle OR $likeVDesc OR b.business_name LIKE ?)
         ORDER BY v.views_count DESC LIMIT 6", [...$likeVTitleParams, ...$likeVDescParams, $like]);
-    $cats = rows("SELECT * FROM categories WHERE status = 'active' AND name LIKE ? ORDER BY sort_order LIMIT 10", [$like]);
+    [$likeCatName, $likeCatNameParams] = search_like_clause('name', $searchTerms);
+    $cats = rows("SELECT * FROM categories WHERE status = 'active' AND $likeCatName ORDER BY sort_order LIMIT 10", $likeCatNameParams);
 }
 $totalFound = array_sum(array_map('count', $results)) + count($businesses) + count($videos) + count($cats);
 if ($qStr !== '') {

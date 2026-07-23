@@ -3,20 +3,6 @@ import { vendorApi } from '../api/vendor';
 import { ApiError } from '../api/client';
 import { DashLayout } from '../components/DashLayout';
 
-const FALLBACK_STATUSES = [
-  'pending',
-  'confirmed',
-  'deposit_paid',
-  'processing',
-  'ready_for_delivery',
-  'out_for_delivery',
-  'delivered',
-  'completed',
-  'cancelled',
-  'refunded',
-  'disputed',
-];
-
 export function VendorOrders() {
   const queryClient = useQueryClient();
   const { data, isLoading, error } = useQuery({
@@ -40,8 +26,6 @@ export function VendorOrders() {
       queryClient.invalidateQueries({ queryKey: ['vendor', 'dashboard'] });
     },
   });
-
-  const statuses = data?.statuses ?? FALLBACK_STATUSES;
 
   return (
     <DashLayout>
@@ -134,11 +118,14 @@ export function VendorOrders() {
           <div className="order-footer">
             <span className="muted small">Update fulfillment status</span>
             <select
-              value={order.status}
-              disabled={statusMutation.isPending}
-              onChange={(e) => statusMutation.mutate({ id: order.id, status: e.target.value })}
+              value=""
+              disabled={statusMutation.isPending || order.allowed_next_statuses.length === 0}
+              onChange={(e) => {
+                if (e.target.value) statusMutation.mutate({ id: order.id, status: e.target.value });
+              }}
             >
-              {statuses.map((status) => (
+              <option value="">{order.allowed_next_statuses.length ? 'Choose next status' : 'Final status'}</option>
+              {order.allowed_next_statuses.map((status) => (
                 <option key={status} value={status}>
                   {status.replaceAll('_', ' ')}
                 </option>

@@ -2,7 +2,7 @@
 // Authenticated/account/API responses are always network-only and never cached.
 // Bump this version when deployment behavior changes. Static assets are fetched
 // network-first so a changed CSS/JS deploy does not strand users on stale files.
-const SW_VERSION = '2026-07-12-asset-refresh';
+const SW_VERSION = '2026-07-16-card-compact';
 const CACHE = 'ezihgebeya-' + SW_VERSION;
 const BASE = location.pathname.startsWith('/ezihgebeya/') ? '/ezihgebeya' : '';
 const stripBase = path => BASE && path.startsWith(BASE + '/') ? path.slice(BASE.length) : path;

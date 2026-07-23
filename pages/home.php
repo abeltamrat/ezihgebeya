@@ -42,8 +42,14 @@ $prodCats = cache_remember("home:prodcats:{$categoryLimit}", 180, fn() => rows("
 include __DIR__ . '/../views/layout_top.php';
 ?>
 <section class="hero">
+  <div class="hero-three" id="hero-three" aria-hidden="true"
+       data-sofa="<?= e(asset_url('assets/models/sofa/sofa_02_1k.gltf')) ?>"
+       data-table="<?= e(asset_url('assets/models/table/coffee_table_round_01_1k.gltf')) ?>"
+       data-vase="<?= e(asset_url('assets/models/vase/ceramic_vase_01_1k.gltf')) ?>">
+    <canvas></canvas>
+  </div>
   <div class="container">
-    <h1><?= e($ui['hero_title']) ?></h1>
+    <h1 class="hero-title"><?= e($ui['hero_title']) ?></h1>
     <p><?= e($ui['hero_subtitle']) ?></p>
     <?php if (!empty($ui['hero_search_enabled'])): ?>
     <form class="hero-search" action="<?= url('products') ?>" method="get">
@@ -116,13 +122,12 @@ include __DIR__ . '/../views/layout_top.php';
     <?php foreach ($prodCats as $c): ?>
       <a class="cat-tile" href="<?= url('products?category=' . e($c['slug'])) ?>" aria-label="<?= e($c['name']) ?> category, <?= number_format((int)$c['listing_count']) ?> <?= (int)$c['listing_count'] === 1 ? 'listing' : 'listings' ?>">
         <span class="cat-icon" aria-hidden="true"><?= system_ui_category_icon((string)$c['name'], 'product') ?></span>
-        <span class="cat-name"><?= e($c['name']) ?></span>
-        <span class="cat-count"><?= number_format((int)$c['listing_count']) ?> <?= (int)$c['listing_count'] === 1 ? 'listing' : 'listings' ?></span>
+        <span class="cat-copy">
+          <span class="cat-name"><?= e($c['name']) ?></span>
+          <span class="cat-count"><?= number_format((int)$c['listing_count']) ?> <?= (int)$c['listing_count'] === 1 ? 'listing' : 'listings' ?></span>
+        </span>
       </a>
     <?php endforeach; ?>
-    <a class="cat-tile cat-more" href="<?= url('products') ?>">
-      <span class="cat-icon"><?= system_ui_icon('search', 'All categories') ?></span><span>All categories</span>
-    </a>
   </div>
 </section>
 <?php endif; ?>
@@ -207,4 +212,12 @@ include __DIR__ . '/../views/layout_top.php';
 </section>
 <?php endif; ?>
 <?php endforeach; ?>
+<script type="module" src="<?= asset_url('assets/js/home-title.js') ?>"></script>
+<script type="importmap">
+{"imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+}}
+</script>
+<script type="module" src="<?= asset_url('assets/js/home-three.js') ?>"></script>
 <?php include __DIR__ . '/../views/layout_bottom.php'; ?>

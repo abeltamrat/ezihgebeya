@@ -544,6 +544,9 @@ include __DIR__ . '/../views/layout_top.php';
             <button><?= $l['is_featured'] ? '★ Featured' : '☆ Feature' ?></button></form>
         </td>
         <td class="row-actions">
+          <?php if ($l['status'] === 'pending_review'): ?>
+            <a class="btn btn-outline btn-sm" href="<?= listing_url($lt, $l) ?>" target="_blank" rel="noopener">View details</a>
+          <?php endif; ?>
           <?php foreach ([['active', '✅'], ['rejected', '❌'], ['paused', '⏸']] as [$s, $lbl]): if ($l['status'] !== $s): ?>
             <?php if ($s === 'rejected') continue; ?>
             <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="listing_status"><input type="hidden" name="ltype" value="<?= $lt ?>"><input type="hidden" name="id" value="<?= $l['id'] ?>"><input type="hidden" name="status" value="<?= $s ?>"><button title="<?= $s ?>"><?= $lbl ?></button></form>

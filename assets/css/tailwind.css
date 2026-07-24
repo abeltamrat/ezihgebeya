@@ -1657,6 +1657,28 @@ label input, label select, label textarea { display: block; width: 100%; margin-
 .ad-timeline-bar:hover { z-index: 4; color: #fff; filter: brightness(1.08); }
 .ad-table-group td { padding: 9px 12px !important; background: var(--brand-soft); color: var(--brand-dark); }
 .ad-table-group span { float: right; font-size: .62rem; }
+.admin-user-stats { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; margin: 14px 0; }
+.admin-user-stats .stat-card { display: grid; gap: 5px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow-sm); }
+.admin-user-stats span { color: var(--muted); font-size: .62rem; font-weight: 800; }
+.admin-user-stats strong { color: var(--ink); font-size: 1.25rem; }
+.admin-user-filters { display: grid; grid-template-columns: 2fr repeat(4,minmax(125px,1fr)) auto; gap: 10px; align-items: end; margin: 16px 0 10px; }
+.admin-user-filters label { margin: 0; color: var(--text-2); font-size: .65rem; font-weight: 800; }
+.admin-user-filters input,.admin-user-filters select { min-height: 40px; margin-top: 4px; padding: 8px 9px; font-size: .7rem; }
+.admin-user-filter-actions { display: flex; gap: 6px; }
+.admin-user-result-head,.admin-user-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; color: var(--muted); font-size: .7rem; }
+.admin-user-detail { margin: 16px 0; border-color: color-mix(in srgb,var(--brand) 35%,var(--line)); }
+.admin-user-profile-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin: 12px 0 16px; }
+.admin-user-profile-grid > div { display: grid; gap: 3px; padding: 12px; border-radius: 10px; background: var(--surface-2); }
+.admin-user-profile-grid span { color: var(--muted); font-size: .58rem; font-weight: 800; text-transform: uppercase; }
+.admin-user-profile-grid strong { color: var(--ink); font-size: .72rem; }
+.admin-user-detail-sections { display: grid; gap: 8px; }
+.admin-user-detail-sections details { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.admin-user-detail-sections summary { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; color: var(--ink); font-size: .72rem; font-weight: 900; cursor: pointer; }
+.admin-user-detail-sections summary span { min-width: 24px; padding: 3px 7px; border-radius: 99px; background: var(--brand-soft); color: var(--brand-dark); text-align: center; }
+.admin-user-detail-sections .table-wrap,.admin-user-events { margin: 0; border-width: 1px 0 0; border-radius: 0; }
+.admin-user-events { display: grid; max-height: 360px; overflow-y: auto; }
+.admin-user-events > div { display: grid; grid-template-columns: minmax(120px,1fr) 1fr auto; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--line); font-size: .65rem; }
+.admin-user-events small,.admin-user-events span { color: var(--muted); }
 .ad-preview-detail_sidebar { grid-template-columns: minmax(220px, 340px); justify-content: center; }
 .ad-preview-browse_inline { grid-template-columns: minmax(220px, 300px); justify-content: center; }
 .ad-preview-video_slide { min-height: 560px; background: #111827; }
@@ -2349,6 +2371,9 @@ label input, label select, label textarea { display: block; width: 100%; margin-
 
 /* --- Responsive --------------------------------------------------------------------------------------------------------------------------------- */
 @media (max-width: 960px) {
+  .admin-user-stats { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .admin-user-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .admin-user-search { grid-column: span 2; }
   .ad-filter-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .ad-timeline-scale-row { grid-template-columns: 135px minmax(0,1fr); }
   .ad-timeline-row { grid-template-columns: 135px minmax(0,1fr); }
@@ -2437,6 +2462,11 @@ label input, label select, label textarea { display: block; width: 100%; margin-
   .hero { padding: 52px 0 44px; }
 }
 @media (max-width: 600px) {
+  .admin-user-stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .admin-user-filters,.admin-user-profile-grid { grid-template-columns: 1fr; }
+  .admin-user-search { grid-column: auto; }
+  .admin-user-filter-actions .btn { flex: 1; }
+  .admin-user-events > div { grid-template-columns: 1fr; gap: 3px; }
   .ad-filter-head { align-items: flex-start; flex-direction: column; }
   .ad-filter-grid { grid-template-columns: 1fr; }
   .ad-filter-search { grid-column: auto; }

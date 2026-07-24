@@ -2146,10 +2146,97 @@ include __DIR__ . '/../views/layout_top.php';
     </script>
 
   <?php elseif ($section === 'users'): ?>
-    <h1>Users</h1>
-    <?php $list = rows("SELECT * FROM users ORDER BY created_at DESC LIMIT 300"); ?>
+    <?php
+      $userTypes = ['customer','seller','manufacturer','importer','service_provider','supplier','admin','super_admin'];
+      $userStatuses = ['pending','active','suspended','banned','deleted'];
+      $userFilter = [
+          'q' => trim((string)($_GET['q'] ?? '')),
+          'type' => in_array($_GET['type'] ?? '', $userTypes, true) ? $_GET['type'] : '',
+          'status' => in_array($_GET['status'] ?? '', $userStatuses, true) ? $_GET['status'] : '',
+          'city' => array_key_exists($_GET['city'] ?? '', CITIES) ? $_GET['city'] : '',
+          'joined' => in_array($_GET['joined'] ?? '', ['7','30','90','365'], true) ? (int)$_GET['joined'] : 0,
+      ];
+      $userPage = max(1, (int)($_GET['page'] ?? 1)); $userPerPage = 50;
+      $userWhere = []; $userParams = [];
+      if ($userFilter['q'] !== '') {
+          $needle = '%' . $userFilter['q'] . '%';
+          $userWhere[] = '(full_name LIKE ? OR phone LIKE ? OR email LIKE ? OR CAST(id AS CHAR) = ?)';
+          array_push($userParams, $needle, $needle, $needle, $userFilter['q']);
+      }
+      if ($userFilter['type'] !== '') { $userWhere[] = 'account_type = ?'; $userParams[] = $userFilter['type']; }
+      if ($userFilter['status'] !== '') { $userWhere[] = 'status = ?'; $userParams[] = $userFilter['status']; }
+      if ($userFilter['joined']) $userWhere[] = 'created_at >= DATE_SUB(NOW(), INTERVAL ' . $userFilter['joined'] . ' DAY)';
+      if ($userFilter['city'] !== '') {
+          $userWhere[] = 'EXISTS (SELECT 1 FROM orders o_city WHERE o_city.customer_id=users.id AND o_city.city=?)';
+          $userParams[] = $userFilter['city'];
+      }
+      $userWhereSql = $userWhere ? implode(' AND ', $userWhere) : '1=1';
+      $userTotal = (int)val("SELECT COUNT(*) FROM users WHERE $userWhereSql", $userParams);
+      $userPages = max(1, (int)ceil($userTotal / $userPerPage)); $userPage = min($userPage, $userPages);
+      $userOffset = ($userPage - 1) * $userPerPage;
+      $list = rows("SELECT users.*,
+          (SELECT COUNT(*) FROM orders o WHERE o.customer_id=users.id) order_count,
+          (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id=users.id AND o.status NOT IN ('cancelled','refunded')) order_value,
+          (SELECT o.city FROM orders o WHERE o.customer_id=users.id AND o.city IS NOT NULL ORDER BY o.created_at DESC LIMIT 1) recent_city
+        FROM users WHERE $userWhereSql ORDER BY created_at DESC LIMIT $userPerPage OFFSET $userOffset", $userParams);
+      $userSummary = row("SELECT COUNT(*) total, SUM(account_type='customer') customers, SUM(status='active') active_users,
+          SUM(status IN ('suspended','banned')) restricted_users, SUM(created_at>=DATE_SUB(NOW(),INTERVAL 30 DAY)) new_30d FROM users");
+      $detailId = $u['account_type'] === 'super_admin' ? max(0, (int)($_GET['view'] ?? 0)) : 0;
+      $detailUser = $detailId ? row("SELECT u.*,
+          (SELECT COUNT(*) FROM remembered_login_tokens rt WHERE rt.user_id=u.id AND rt.expires_at>NOW()) remembered_devices
+        FROM users u WHERE u.id=?", [$detailId]) : null;
+    ?>
+    <div class="section-head"><div><p class="eyebrow">Customer operations</p><h1>Users</h1><p class="muted">Search accounts, review customer history, and handle restrictions and appeals.</p></div></div>
+    <div class="admin-user-stats">
+      <div class="stat-card"><span>All accounts</span><strong><?= number_format((int)$userSummary['total']) ?></strong></div>
+      <div class="stat-card"><span>Customers</span><strong><?= number_format((int)$userSummary['customers']) ?></strong></div>
+      <div class="stat-card"><span>Active</span><strong><?= number_format((int)$userSummary['active_users']) ?></strong></div>
+      <div class="stat-card"><span>Restricted</span><strong><?= number_format((int)$userSummary['restricted_users']) ?></strong></div>
+      <div class="stat-card"><span>Joined in 30 days</span><strong><?= number_format((int)$userSummary['new_30d']) ?></strong></div>
+    </div>
+    <?php if ($detailUser): ?>
+      <?php
+        $detailOrders = rows("SELECT o.*, b.business_name FROM orders o JOIN businesses b ON b.id=o.business_id WHERE o.customer_id=? ORDER BY o.created_at DESC LIMIT 30", [$detailId]);
+        $detailPayments = rows("SELECT * FROM payments WHERE payer_id=? ORDER BY created_at DESC LIMIT 30", [$detailId]);
+        $detailInquiries = rows("SELECT i.*, b.business_name FROM inquiries i JOIN businesses b ON b.id=i.business_id WHERE i.customer_id=? ORDER BY i.created_at DESC LIMIT 30", [$detailId]);
+        $detailReviews = rows("SELECT r.*, b.business_name FROM reviews r JOIN businesses b ON b.id=r.business_id WHERE r.reviewer_id=? ORDER BY r.created_at DESC LIMIT 30", [$detailId]);
+        $detailSanctions = rows("SELECT s.*, a.full_name admin_name FROM account_sanctions s LEFT JOIN users a ON a.id=s.admin_id WHERE s.user_id=? ORDER BY s.created_at DESC", [$detailId]);
+        $detailEvents = rows("SELECT * FROM events WHERE user_id=? ORDER BY created_at DESC LIMIT 40", [$detailId]);
+      ?>
+      <section class="panel admin-user-detail">
+        <div class="section-head">
+          <div><p class="eyebrow">Customer #<?= $detailId ?></p><h2><?= e($detailUser['full_name']) ?></h2><p class="muted"><?= e($detailUser['phone'] ?: 'No phone') ?> · <?= e($detailUser['email'] ?: 'No email') ?></p></div>
+          <a class="btn btn-outline btn-sm" href="<?= url('admin/users') ?>">Close details</a>
+        </div>
+        <div class="admin-user-profile-grid">
+          <div><span>Role</span><strong><?= e(ucwords(str_replace('_', ' ', $detailUser['account_type']))) ?></strong></div>
+          <div><span>Status</span><strong><?= e(ucfirst($detailUser['status'])) ?></strong></div>
+          <div><span>Phone</span><strong><?= $detailUser['phone_verified_at'] ? 'Verified' : 'Not verified' ?></strong></div>
+          <div><span>Last login</span><strong><?= $detailUser['last_login_at'] ? date('M j, Y g:i A', strtotime($detailUser['last_login_at'])) : 'Never' ?></strong></div>
+          <div><span>Joined</span><strong><?= date('M j, Y', strtotime($detailUser['created_at'])) ?></strong></div>
+          <div><span>Remembered devices</span><strong><?= (int)$detailUser['remembered_devices'] ?></strong></div>
+        </div>
+        <div class="admin-user-detail-sections">
+          <details open><summary>Orders <span><?= count($detailOrders) ?></span></summary><div class="table-wrap"><table class="data-table"><tr><th>Order</th><th>Business</th><th>Total</th><th>Status</th><th>Date</th></tr><?php foreach ($detailOrders as $item): ?><tr><td><?= e($item['order_number']) ?></td><td><?= e($item['business_name']) ?></td><td><?= money($item['total']) ?></td><td><?= e($item['status']) ?></td><td><?= date('M j, Y', strtotime($item['created_at'])) ?></td></tr><?php endforeach; ?></table><?php if (!$detailOrders): ?><p class="muted small">No orders.</p><?php endif; ?></div></details>
+          <details><summary>Payments <span><?= count($detailPayments) ?></span></summary><div class="table-wrap"><table class="data-table"><tr><th>Type</th><th>Amount</th><th>Method</th><th>Status</th><th>Date</th></tr><?php foreach ($detailPayments as $item): ?><tr><td><?= e(str_replace('_', ' ', $item['payment_type'])) ?></td><td><?= money($item['amount']) ?></td><td><?= e($item['payment_method']) ?></td><td><?= e($item['status']) ?></td><td><?= date('M j, Y', strtotime($item['created_at'])) ?></td></tr><?php endforeach; ?></table><?php if (!$detailPayments): ?><p class="muted small">No payments.</p><?php endif; ?></div></details>
+          <details><summary>Inquiries <span><?= count($detailInquiries) ?></span></summary><div class="table-wrap"><table class="data-table"><tr><th>Listing</th><th>Business</th><th>Type</th><th>Status</th><th>Date</th></tr><?php foreach ($detailInquiries as $item): ?><tr><td><?= e($item['listing_title'] ?: 'General inquiry') ?></td><td><?= e($item['business_name']) ?></td><td><?= e(str_replace('_', ' ', $item['inquiry_type'])) ?></td><td><?= e($item['status']) ?></td><td><?= date('M j, Y', strtotime($item['created_at'])) ?></td></tr><?php endforeach; ?></table><?php if (!$detailInquiries): ?><p class="muted small">No inquiries.</p><?php endif; ?></div></details>
+          <details><summary>Reviews <span><?= count($detailReviews) ?></span></summary><div class="table-wrap"><table class="data-table"><tr><th>Business</th><th>Rating</th><th>Comment</th><th>Status</th><th>Date</th></tr><?php foreach ($detailReviews as $item): ?><tr><td><?= e($item['business_name']) ?></td><td><?= (int)$item['rating'] ?>/5</td><td><?= e(mb_strimwidth((string)$item['comment'], 0, 90, '…')) ?></td><td><?= e($item['status']) ?></td><td><?= date('M j, Y', strtotime($item['created_at'])) ?></td></tr><?php endforeach; ?></table><?php if (!$detailReviews): ?><p class="muted small">No reviews.</p><?php endif; ?></div></details>
+          <details><summary>Sanction history <span><?= count($detailSanctions) ?></span></summary><div class="table-wrap"><table class="data-table"><tr><th>Level</th><th>Reason</th><th>Administrator</th><th>Appeal</th><th>Status</th><th>Date</th></tr><?php foreach ($detailSanctions as $item): ?><tr><td><?= e($item['level']) ?></td><td><?= e(str_replace('_', ' ', $item['reason'])) ?></td><td><?= e($item['admin_name'] ?: 'System') ?></td><td><?= e($item['appeal_status']) ?></td><td><?= e($item['status']) ?></td><td><?= date('M j, Y', strtotime($item['created_at'])) ?></td></tr><?php endforeach; ?></table><?php if (!$detailSanctions): ?><p class="muted small">No sanctions.</p><?php endif; ?></div></details>
+          <details><summary>Recent activity <span><?= count($detailEvents) ?></span></summary><div class="admin-user-events"><?php foreach ($detailEvents as $item): ?><div><strong><?= e(str_replace('_', ' ', $item['event_type'])) ?></strong><span><?= e($item['listing_type'] ?: 'account') ?><?= $item['listing_id'] ? ' #' . (int)$item['listing_id'] : '' ?></span><small><?= date('M j, Y g:i A', strtotime($item['created_at'])) ?><?= $item['city'] ? ' · ' . e($item['city']) : '' ?></small></div><?php endforeach; ?><?php if (!$detailEvents): ?><p class="muted small">No tracked activity.</p><?php endif; ?></div></details>
+        </div>
+      </section>
+    <?php endif; ?>
+    <form class="panel admin-user-filters" method="get" action="<?= url('admin/users') ?>">
+      <label class="admin-user-search">Search<input name="q" value="<?= e($userFilter['q']) ?>" placeholder="Name, phone, email, or customer ID"></label>
+      <label>Account type<select name="type"><option value="">All account types</option><?php foreach ($userTypes as $value): ?><option value="<?= e($value) ?>" <?= $userFilter['type'] === $value ? 'selected' : '' ?>><?= e(ucwords(str_replace('_', ' ', $value))) ?></option><?php endforeach; ?></select></label>
+      <label>Status<select name="status"><option value="">All statuses</option><?php foreach ($userStatuses as $value): ?><option value="<?= e($value) ?>" <?= $userFilter['status'] === $value ? 'selected' : '' ?>><?= e(ucfirst($value)) ?></option><?php endforeach; ?></select></label>
+      <label>Customer city<select name="city"><option value="">All cities</option><?php foreach (array_keys(CITIES) as $value): ?><option value="<?= e($value) ?>" <?= $userFilter['city'] === $value ? 'selected' : '' ?>><?= e($value) ?></option><?php endforeach; ?></select></label>
+      <label>Joined<select name="joined"><option value="">Any time</option><?php foreach ([7=>'Last 7 days',30=>'Last 30 days',90=>'Last 90 days',365=>'Last year'] as $value=>$label): ?><option value="<?= $value ?>" <?= $userFilter['joined'] === $value ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></label>
+      <div class="admin-user-filter-actions"><button class="btn btn-primary">Apply</button><a class="btn btn-ghost" href="<?= url('admin/users') ?>">Reset</a></div>
+    </form>
+    <div class="admin-user-result-head"><strong><?= number_format($userTotal) ?> account<?= $userTotal === 1 ? '' : 's' ?></strong><span>Page <?= $userPage ?> of <?= $userPages ?></span></div>
     <div class="table-wrap"><table class="data-table">
-      <tr><th>Name</th><th>Phone</th><th>Email</th><th>Type</th><th>Status</th><th>Sanction / Appeal</th><th>Joined</th><th>Actions</th></tr>
+      <tr><th>Name</th><th>Phone</th><th>Email</th><th>Type</th><th>Customer activity</th><th>Status</th><th>Sanction / Appeal</th><th>Joined</th><th>Actions</th></tr>
       <?php foreach ($list as $usr): ?>
       <?php $sanction = active_account_sanction((int)$usr['id']); ?>
       <tr>
@@ -2157,6 +2244,7 @@ include __DIR__ . '/../views/layout_top.php';
         <td><?= e($usr['phone']) ?></td>
         <td><?= e($usr['email'] ?: '—') ?></td>
         <td><?= e($usr['account_type']) ?></td>
+        <td class="small"><strong><?= (int)$usr['order_count'] ?> order<?= (int)$usr['order_count'] === 1 ? '' : 's' ?></strong><br><span class="muted"><?= money($usr['order_value']) ?><?= $usr['recent_city'] ? ' · ' . e($usr['recent_city']) : '' ?></span></td>
         <td><span class="badge badge-status-<?= e($usr['status']) ?>"><?= e($usr['status']) ?></span></td>
         <td class="small">
           <?php if ($sanction): ?>
@@ -2177,6 +2265,7 @@ include __DIR__ . '/../views/layout_top.php';
         </td>
         <td><?= date('M j, Y', strtotime($usr['created_at'])) ?></td>
         <td class="row-actions">
+          <?php if ($u['account_type'] === 'super_admin'): ?><a href="<?= url('admin/users?view=' . (int)$usr['id']) ?>">View</a><?php endif; ?>
           <?php if ($usr['id'] != $u['id'] && !in_array($usr['account_type'], ['admin', 'super_admin'])): ?>
             <?php if ($usr['status'] !== 'active'): ?>
               <form method="post"><?= csrf_field() ?><input type="hidden" name="do" value="user_status"><input type="hidden" name="id" value="<?= $usr['id'] ?>"><input type="hidden" name="status" value="active"><button title="restore">Restore</button></form>
@@ -2201,6 +2290,14 @@ include __DIR__ . '/../views/layout_top.php';
       </tr>
       <?php endforeach; ?>
     </table></div>
+    <?php if ($userPages > 1): ?>
+      <?php $pageQuery = $_GET; unset($pageQuery['page'], $pageQuery['view']); ?>
+      <nav class="admin-user-pagination">
+        <?php if ($userPage > 1): $pageQuery['page'] = $userPage - 1; ?><a class="btn btn-outline btn-sm" href="<?= url('admin/users?' . http_build_query($pageQuery)) ?>">← Previous</a><?php endif; ?>
+        <span>Showing <?= $userOffset + 1 ?>–<?= min($userOffset + $userPerPage, $userTotal) ?> of <?= number_format($userTotal) ?></span>
+        <?php if ($userPage < $userPages): $pageQuery['page'] = $userPage + 1; ?><a class="btn btn-outline btn-sm" href="<?= url('admin/users?' . http_build_query($pageQuery)) ?>">Next →</a><?php endif; ?>
+      </nav>
+    <?php endif; ?>
   <?php elseif ($section === 'categories'): ?>
     <h1>Categories</h1>
     <form method="post" class="panel form-inline">

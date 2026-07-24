@@ -9,12 +9,17 @@
 
 /** Attribute definitions for a category, in display order. */
 function category_attributes(int $categoryId): array {
+    // Dynamic attributes were added in upgrade6.sql. Public listing pages must remain
+    // available during a rolling FTP deployment even if production migrations have
+    // not been run yet; the feature simply stays disabled until the table exists.
+    if (!db_table_exists('category_attributes')) return [];
     return rows("SELECT * FROM category_attributes WHERE category_id = ? ORDER BY sort_order, id", [$categoryId]);
 }
 
 /** Attribute definitions for every category of a given listing type, indexed by category_id.
  * Used by browse pages that need filter controls across all categories in one query. */
 function category_attributes_by_type(string $listingType): array {
+    if (!db_table_exists('category_attributes')) return [];
     $rowsList = rows("SELECT ca.* FROM category_attributes ca JOIN categories c ON c.id = ca.category_id
         WHERE c.type = ? AND c.status = 'active' ORDER BY ca.sort_order, ca.id", [$listingType]);
     $byCategory = [];

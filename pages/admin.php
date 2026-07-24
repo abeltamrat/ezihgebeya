@@ -9,6 +9,7 @@ $sections = ['dashboard' => '📊 Dashboard', 'businesses' => '🏪 Businesses',
     'locations' => '📍 Locations', 'pages' => '📄 Content Pages', 'analytics' => '📈 Analytics', 'audit' => '🧾 Audit Log'];
 $sections['support'] = 'Support';
 if ($u['account_type'] === 'super_admin') {
+    $sections['software'] = 'Software & Plugins';
     $sections['ads'] = 'Ad Manager';
     $sections['ad-placements'] = 'Advertising Placements';
     $sections['settings'] = '⚙️ System Settings';
@@ -462,6 +463,115 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($do === 'synonym_delete') {
         q("DELETE FROM search_synonyms WHERE id = ?", [$id]);
         flash('Synonym removed.');
+    } elseif ($do === 'software_save' && $u['account_type'] === 'super_admin') {
+        if (!software_library_ready()) {
+            flash('Run database migrations before publishing software.', 'error');
+        } else {
+            $existing = $id ? row("SELECT * FROM software_items WHERE id = ?", [$id]) : null;
+            $newPackage = null;
+            try {
+                if ($id && !$existing) throw new RuntimeException('Software entry not found.');
+                $title = trim((string)($_POST['title'] ?? ''));
+                $short = trim((string)($_POST['short_description'] ?? ''));
+                $description = trim((string)($_POST['description'] ?? ''));
+                $itemType = ($_POST['item_type'] ?? '') === 'plugin' ? 'plugin' : 'software';
+                $status = in_array($_POST['software_status'] ?? '', ['draft', 'published', 'archived'], true)
+                    ? $_POST['software_status'] : 'draft';
+                $downloadMode = ($_POST['download_mode'] ?? '') === 'external' ? 'external' : 'file';
+                $externalInput = trim((string)($_POST['external_url'] ?? ''));
+                $externalUrl = software_validate_external_url($externalInput);
+                $youtubeInput = trim((string)($_POST['youtube_url'] ?? ''));
+                $youtubeId = software_youtube_id($youtubeInput);
+                if (mb_strlen($title) < 2) throw new RuntimeException('Title must contain at least 2 characters.');
+                if (mb_strlen($short) < 10 || mb_strlen($short) > 300) throw new RuntimeException('Short description must contain 10–300 characters.');
+                if (mb_strlen($description) < 20) throw new RuntimeException('Full description must contain at least 20 characters.');
+                if ($downloadMode === 'external' && ($externalInput === '' || !$externalUrl)) {
+                    throw new RuntimeException('Enter a valid HTTP or HTTPS download link.');
+                }
+                if ($youtubeInput !== '' && !$youtubeId) throw new RuntimeException('Enter a valid YouTube video link.');
+
+                $newPackage = $downloadMode === 'file'
+                    ? software_upload_package($_FILES['software_file'] ?? [])
+                    : null;
+                $filePath = $existing['file_path'] ?? null;
+                $originalName = $existing['original_filename'] ?? null;
+                $fileSize = $existing['file_size'] ?? null;
+                if ($newPackage) {
+                    $filePath = $newPackage['path'];
+                    $originalName = $newPackage['name'];
+                    $fileSize = $newPackage['size'];
+                }
+                if ($downloadMode === 'external') {
+                    $filePath = $originalName = $fileSize = null;
+                } else {
+                    $externalUrl = null;
+                }
+                if ($status === 'published' && !$filePath && !$externalUrl) {
+                    throw new RuntimeException('Published entries need either an uploaded package or an external download link.');
+                }
+
+                $values = [
+                    $title, $itemType, $short, $description,
+                    trim((string)($_POST['version'] ?? '')) ?: null,
+                    trim((string)($_POST['developer'] ?? '')) ?: null,
+                    trim((string)($_POST['category'] ?? '')) ?: null,
+                    trim((string)($_POST['platforms'] ?? '')) ?: null,
+                    trim((string)($_POST['license_type'] ?? '')) ?: null,
+                    $filePath, $originalName, $fileSize, $externalUrl,
+                    $youtubeInput ?: null, $youtubeId, $status,
+                    isset($_POST['is_featured']) ? 1 : 0,
+                ];
+                if ($existing) {
+                    q("UPDATE software_items SET title=?, item_type=?, short_description=?, description=?, version=?, developer=?,
+                       category=?, platforms=?, license_type=?, file_path=?, original_filename=?, file_size=?, external_url=?,
+                       youtube_url=?, youtube_video_id=?, status=?, is_featured=?,
+                       published_at=IF(?='published', COALESCE(published_at,NOW()), published_at) WHERE id=?",
+                      [...$values, $status, $id]);
+                    $softwareId = $id;
+                } else {
+                    $slug = slugify($title, 'software_items');
+                    q("INSERT INTO software_items
+                       (title, slug, item_type, short_description, description, version, developer, category, platforms,
+                        license_type, file_path, original_filename, file_size, external_url, youtube_url, youtube_video_id,
+                        status, is_featured, created_by, published_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, IF(?='published',NOW(),NULL))",
+                      [$title, $slug, ...array_slice($values, 1), $u['id'], $status]);
+                    $softwareId = (int)db()->lastInsertId();
+                }
+                if ($newPackage && $existing && $existing['file_path'] && $existing['file_path'] !== $newPackage['path']) {
+                    software_delete_private_file($existing['file_path']);
+                } elseif ($existing && $downloadMode === 'external' && $existing['file_path']) {
+                    software_delete_private_file($existing['file_path']);
+                }
+                software_add_screenshots($softwareId, $_FILES['screenshots'] ?? []);
+                flash(($existing ? 'Updated' : 'Created') . ' software entry.');
+                $redirectQuery = 'edit=' . $softwareId;
+            } catch (Throwable $e) {
+                if ($newPackage) software_delete_private_file($newPackage['path']);
+                flash($e->getMessage(), 'error');
+                if ($id) $redirectQuery = 'edit=' . $id;
+            }
+        }
+    } elseif ($do === 'software_status' && $u['account_type'] === 'super_admin'
+        && in_array($_POST['software_status'] ?? '', ['draft', 'published', 'archived'], true)) {
+        $item = row("SELECT file_path, external_url FROM software_items WHERE id = ?", [$id]);
+        if (!$item) {
+            flash('Software entry not found.', 'error');
+        } elseif ($_POST['software_status'] === 'published' && !$item['file_path'] && !$item['external_url']) {
+            flash('Add a package or external link before publishing.', 'error');
+        } else {
+            q("UPDATE software_items SET status=?, published_at=IF(?='published',COALESCE(published_at,NOW()),published_at) WHERE id=?",
+              [$_POST['software_status'], $_POST['software_status'], $id]);
+            flash('Software status updated.');
+        }
+    } elseif ($do === 'software_screenshot_delete' && $u['account_type'] === 'super_admin') {
+        $shot = row("SELECT image_path, software_id FROM software_screenshots WHERE id = ?", [$id]);
+        if ($shot) {
+            q("DELETE FROM software_screenshots WHERE id = ?", [$id]);
+            software_delete_screenshot_file($shot['image_path']);
+            $redirectQuery = 'edit=' . (int)$shot['software_id'];
+            flash('Screenshot removed.');
+        }
     } else {
         require __DIR__ . '/admin_more_actions.php'; // verification, locations, pages, admins, backups, ad credits
     }
@@ -2404,6 +2514,9 @@ include __DIR__ . '/../views/layout_top.php';
       </tr>
       <?php endforeach; ?>
     </table></div>
+
+  <?php elseif ($section === 'software' && $u['account_type'] === 'super_admin'): ?>
+    <?php include __DIR__ . '/admin_software.php'; ?>
 
   <?php elseif (in_array($section, ['verification', 'locations', 'pages', 'analytics', 'audit', 'admins', 'backups', 'settings'], true)): ?>
     <?php include __DIR__ . '/admin_more.php'; ?>

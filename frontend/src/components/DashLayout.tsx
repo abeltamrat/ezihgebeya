@@ -20,6 +20,7 @@ const VENDOR_NAV: NavItem[] = [
   { to: '/vendor/boost', label: 'Boost & TOP Pin', icon: 'spark', group: 'Grow' },
   { to: '/vendor/videos', label: 'Videos', icon: 'video', group: 'Grow' },
   { to: '/vendor/analytics', label: 'Analytics', icon: 'chart', group: 'Grow' },
+  { to: '/vendor/software', label: 'Software and plugins', icon: 'code', group: 'Resources' },
   { to: '/vendor/verification', label: 'Verification', icon: 'shield', group: 'Trust' },
   { to: '/vendor/reviews', label: 'Reviews', icon: 'star', group: 'Trust' },
 ];
@@ -47,6 +48,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/payments', label: 'Payments', icon: 'cart', group: 'Commerce', external: true },
   { to: '/admin/analytics', label: 'Analytics', icon: 'chart', group: 'Operations', external: true },
   { to: '/admin/ads', label: 'Ad Manager', icon: 'spark', group: 'Operations', external: true },
+  { to: '/admin/software', label: 'Software & Plugins', icon: 'code', group: 'Operations', external: true },
   { to: '/admin/settings', label: 'System Settings', icon: 'tool', group: 'System', external: true },
   { to: '/admin/backups', label: 'Backups', icon: 'layers', group: 'System', external: true },
 ];
@@ -60,6 +62,7 @@ const ICON_PATHS: Record<string, string> = {
   shield: 'M12 3 20 6v6c0 5-3.4 8-8 10-4.6-2-8-5-8-10V6z M8 12l3 3 5-6', star: 'm12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z',
   cart: 'M3 4h2l2 11h10l3-8H6 M9 20h.01 M17 20h.01', heart: 'M12 21S3 16 3 9a5 5 0 0 1 9-3 5 5 0 0 1 9 3c0 7-9 12-9 12z',
   bell: 'M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9 M10 21h4',
+  code: 'M8 9 4 12l4 3 M16 9l4 3-4 3 M14 5l-4 14',
 };
 
 function NavIcon({ name }: { name: string }) {

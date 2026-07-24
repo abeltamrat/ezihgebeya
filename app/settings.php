@@ -120,6 +120,16 @@ function system_settings_defaults(): array {
             'fcm_web_config' => '',           // JSON: {apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId, vapidKey}
             'fcm_service_account_json' => '', // JSON service-account key downloaded from Firebase console
         ],
+        'model_conversion' => [
+            // Heavy 3D conversion runs outside PHP. Cron sends private source files to
+            // this worker and the worker returns GLB/USDZ through a signed callback.
+            'enabled' => 0,
+            'endpoint_url' => '',
+            'secret' => '',
+            'formats' => 'skp,blend,fbx,obj,dae,3ds,stl,ply,gltf,zip',
+            'max_source_mb' => 100,
+            'retry_limit' => 3,
+        ],
         'seo' => [
             'meta_description' => SITE_TAGLINE,
             'head_snippet' => '',     // analytics / verification tags injected into <head>
@@ -299,6 +309,27 @@ function sanitize_system_settings(array $in): array {
         'fcm_project_id' => mb_substr(trim($n['fcm_project_id'] ?? ''), 0, 150),
         'fcm_web_config' => mb_substr(trim($n['fcm_web_config'] ?? ''), 0, 2000),
         'fcm_service_account_json' => mb_substr(trim($n['fcm_service_account_json'] ?? ''), 0, 8000),
+    ];
+
+    $mc = $in['model_conversion'] ?? [];
+    $currentModelConversion = (array)sys('model_conversion', []);
+    $endpoint = mb_substr(trim((string)($mc['endpoint_url'] ?? '')), 0, 500);
+    if ($endpoint !== '' && !filter_var($endpoint, FILTER_VALIDATE_URL)) $endpoint = '';
+    $supportedModelFormats = ['skp', 'blend', 'fbx', 'obj', 'dae', '3ds', 'stl', 'ply', 'gltf', 'zip'];
+    $requestedFormats = preg_split('/[\s,;]+/', strtolower((string)($mc['formats'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $formats = array_values(array_intersect($supportedModelFormats, array_unique($requestedFormats)));
+    $newModelSecret = trim((string)($mc['secret'] ?? ''));
+    $out['model_conversion'] = [
+        'enabled' => !empty($mc['enabled']) ? 1 : 0,
+        'endpoint_url' => $endpoint,
+        'secret' => mb_substr(
+            $newModelSecret !== '' ? $newModelSecret : (string)($currentModelConversion['secret'] ?? ''),
+            0,
+            500
+        ),
+        'formats' => implode(',', $formats ?: $supportedModelFormats),
+        'max_source_mb' => max(1, min(500, (int)($mc['max_source_mb'] ?? $d['model_conversion']['max_source_mb']))),
+        'retry_limit' => max(1, min(10, (int)($mc['retry_limit'] ?? $d['model_conversion']['retry_limit']))),
     ];
 
     $s = $in['seo'] ?? [];

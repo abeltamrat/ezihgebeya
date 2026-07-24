@@ -78,6 +78,9 @@ export interface ListingMeta {
   ar_enabled: boolean;
   ar_allowed: boolean;
   ar_model_max_mb: number;
+  model_conversion_enabled: boolean;
+  model_conversion_formats: string[];
+  model_conversion_max_source_mb: number;
   profile_location: {
     city: string;
     subcity: string;
@@ -126,6 +129,18 @@ export interface Listing {
   minimum_order_quantity: string | number | null;
   images: Array<{ id: number; url: string; is_primary: boolean }>;
   ar_models: Array<{ type: 'glb' | 'usdz'; url: string }>;
+  model_conversion: {
+    id: number;
+    source_name: string;
+    source_format: string;
+    source_size: number;
+    status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+    attempts: number;
+    error: string | null;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+  } | null;
 }
 
 export interface VendorInquiry {
@@ -301,6 +316,36 @@ export interface VendorAnalytics {
   top_videos: Array<{ id: number; title: string; views: number; cta_clicks: number; ctr_percent: number | null }>;
 }
 
+export interface VendorSoftwareItem {
+  id: number;
+  title: string;
+  slug: string;
+  item_type: 'software' | 'plugin';
+  short_description: string;
+  description: string;
+  version: string | null;
+  developer: string | null;
+  category: string | null;
+  platforms: string[];
+  license_type: string | null;
+  delivery_type: 'file' | 'external';
+  file_name: string | null;
+  file_size: number | null;
+  download_url: string;
+  youtube_embed_url: string | null;
+  is_featured: boolean;
+  download_count: number;
+  published_at: string | null;
+  screenshots: Array<{ id: number; url: string; caption: string | null }>;
+}
+
+export interface VendorSoftwareLibrary {
+  ok: true;
+  data: VendorSoftwareItem[];
+  categories: string[];
+  platforms: string[];
+}
+
 export const vendorApi = {
   dashboard: () => api.get<VendorDashboard>('/vendor/dashboard'),
   business: () => api.get<VendorBusinessState>('/vendor/business'),
@@ -318,11 +363,16 @@ export const vendorApi = {
     Array.from(files).forEach((f) => form.append('images[]', f));
     return api.post<{ ok: true; uploaded: number }>(`/vendor/listings/${type}/${id}/images`, form);
   },
-  uploadModels: (id: number, glb: File | null, usdz: File | null) => {
+  uploadModels: (id: number, glb: File | null, usdz: File | null, source: File | null = null) => {
     const form = new FormData();
     if (glb) form.set('model_glb', glb);
     if (usdz) form.set('model_usdz', usdz);
-    return api.post<{ ok: true; uploaded: Array<'glb' | 'usdz'> }>(`/vendor/listings/product/${id}/models`, form);
+    if (source) form.set('model_source', source);
+    return api.post<{
+      ok: true;
+      uploaded: Array<'glb' | 'usdz'>;
+      conversion: Listing['model_conversion'];
+    }>(`/vendor/listings/product/${id}/models`, form);
   },
   setPrimaryImage: (id: number, imageId: number) =>
     api.post<{ ok: true }>(`/vendor/listings/product/${id}/images/${imageId}/primary`),
@@ -356,4 +406,5 @@ export const vendorApi = {
   replyToReview: (id: number, reply: string) =>
     api.post<{ ok: true }>(`/vendor/reviews/${id}/reply`, { reply }),
   analytics: () => api.get<VendorAnalytics>('/vendor/analytics'),
+  softwareLibrary: () => api.get<VendorSoftwareLibrary>('/vendor/software'),
 };

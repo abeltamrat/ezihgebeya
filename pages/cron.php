@@ -18,19 +18,24 @@ try {
 
 $log = [];
 try {
-    cron_run_daily_job($log);
+    if ($jobName === 'model-conversions') model_conversion_process_pending($log);
+    else cron_run_daily_job($log);
     $summary = implode(' | ', $log);
     if ($runId) q("UPDATE cron_runs SET status = 'ok', summary = ?, finished_at = NOW() WHERE id = ?", [mb_substr($summary, 0, 60000), $runId]);
-    echo "[" . date('c') . "] cron/daily OK\n" . implode("\n", $log) . "\n";
+    echo "[" . date('c') . "] cron/$jobName OK\n" . implode("\n", $log) . "\n";
 } catch (Throwable $e) {
     if ($runId) q("UPDATE cron_runs SET status = 'failed', summary = ?, finished_at = NOW() WHERE id = ?", [mb_substr($e->getMessage(), 0, 60000), $runId]);
     outbox_log('cron-error', $jobName, $e->getMessage());
     http_response_code(500);
-    echo "[" . date('c') . "] cron/daily FAILED: " . $e->getMessage() . "\n" . implode("\n", $log) . "\n";
+    echo "[" . date('c') . "] cron/$jobName FAILED: " . $e->getMessage() . "\n" . implode("\n", $log) . "\n";
 }
 exit;
 
 function cron_run_daily_job(array &$log): void {
+
+// Daily remains a fallback dispatcher in case the dedicated five-minute conversion
+// cron has not been configured yet.
+model_conversion_process_pending($log);
 
 // 1. expire promotions past end date → unset visibility flags
 $expired = rows("SELECT * FROM promotions WHERE status = 'active' AND ends_at IS NOT NULL AND ends_at < NOW()");

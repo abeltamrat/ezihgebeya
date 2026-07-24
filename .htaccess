@@ -25,7 +25,7 @@ RewriteRule ^(?:\.env(?:\..*)?|.*\.(?:log|sql|bak|old|orig|dist|ini|phar))$ - [F
 RewriteRule ^assets/.*\.(css|js)$ - [E=EZIH_CODE_ASSET:1]
 RewriteRule ^assets/.*\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$ - [E=EZIH_LONG_ASSET:1]
 RewriteRule ^app/assets/.*\.(css|js)$ - [E=EZIH_CODE_ASSET:1]
-RewriteRule ^app/assets/.*\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$ - [E=EZIH_LONG_ASSET:1]
+RewriteRule ^app/assets/.*\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf|wasm)$ - [E=EZIH_LONG_ASSET:1]
 RewriteRule ^uploads/.*\.(png|jpe?g|gif|webp|svg|mp4|webm|glb|usdz)$ - [E=EZIH_PUBLIC_MEDIA:1]
 RewriteRule ^(sw\.js|manifest(?:\.json|\.webmanifest)|app/index\.html)$ - [E=EZIH_NO_CACHE:1]
 
@@ -47,6 +47,10 @@ Header always set Referrer-Policy "strict-origin-when-cross-origin"
 # geolocation=self: location auto-detect (assets/js/app.js). xr-spatial-tracking=self:
 # WebXR "view in your room" AR on the product page. camera/microphone/payment off — unused.
 Header always set Permissions-Policy "geolocation=(self), xr-spatial-tracking=(self), camera=(), microphone=(), payment=()"
+</IfModule>
+
+<IfModule mod_mime.c>
+AddType application/wasm .wasm
 </IfModule>
 
 # Route authenticated React app paths to the static Vite shell. Real files under

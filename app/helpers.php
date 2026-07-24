@@ -1700,16 +1700,35 @@ function order_number(): string {
     return 'EG' . date('ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 5));
 }
 
-function upload_model(array $file, string $ext): ?string {
-    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
-    if (upload_rate_exceeded('model')) {
-        flash('Too many upload attempts. Please wait a while before uploading more files.', 'error');
-        return null;
+/**
+ * Validate and persist a display-ready AR model.
+ *
+ * The array return keeps background conversion callbacks independent from session
+ * flash messages while upload_model() remains a backwards-compatible form helper.
+ *
+ * @return array{path:?string,error:?string}
+ */
+function store_model_upload(array $file, string $ext, bool $rateLimit = true): array {
+    $ext = strtolower($ext);
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return ['path' => null, 'error' => "Select a .$ext model."];
     }
-    if ($file['error'] !== UPLOAD_ERR_OK) { flash('3D model upload failed.', 'error'); return null; }
+    if ($rateLimit && upload_rate_exceeded('model')) {
+        return ['path' => null, 'error' => 'Too many upload attempts. Please wait a while before uploading more files.'];
+    }
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        $tooLarge = in_array($file['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true);
+        return ['path' => null, 'error' => $tooLarge
+            ? '3D model upload exceeds the server upload limit.'
+            : '3D model upload failed.'];
+    }
     $maxMb = (int)sys('limits.ar_model_max_mb', 10);
-    if ($file['size'] > $maxMb * 1024 * 1024) { flash("3D model too large (max $maxMb MB).", 'error'); return null; }
-    if (strtolower(pathinfo($file['name'], PATHINFO_EXTENSION)) !== $ext) { flash("Model must be a .$ext file.", 'error'); return null; }
+    if (($file['size'] ?? 0) > $maxMb * 1024 * 1024) {
+        return ['path' => null, 'error' => "3D model too large (max $maxMb MB)."];
+    }
+    if (strtolower(pathinfo((string)($file['name'] ?? ''), PATHINFO_EXTENSION)) !== $ext) {
+        return ['path' => null, 'error' => "Model must be a .$ext file."];
+    }
     // Content-sniff the actual bytes rather than trusting the client-supplied filename/extension alone.
     // .glb (glTF Binary) always starts with the 4-byte magic "glTF"; .usdz is a zip container and
     // always starts with a standard ZIP local-file-header signature. This rejects arbitrary content
@@ -1722,12 +1741,28 @@ function upload_model(array $file, string $ext): ?string {
         'usdz' => in_array(substr((string)$head, 0, 4), ["PK\x03\x04", "PK\x05\x06", "PK\x07\x08"], true),
         default => false,
     };
-    if (!$validMagic) { flash("File does not look like a valid .$ext model.", 'error'); return null; }
+    if (!$validMagic) {
+        return ['path' => null, 'error' => "File does not look like a valid .$ext model."];
+    }
     $dir = UPLOAD_DIR . '/ar-models';
-    if (!is_dir($dir)) mkdir($dir, 0775, true);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return ['path' => null, 'error' => 'Could not create the model storage directory.'];
+    }
     $name = 'ar-models/' . bin2hex(random_bytes(10)) . '.' . $ext;
-    if (!move_uploaded_file($file['tmp_name'], UPLOAD_DIR . '/' . $name)) { flash('Could not save model.', 'error'); return null; }
-    return $name;
+    if (!move_uploaded_file($file['tmp_name'], UPLOAD_DIR . '/' . $name)) {
+        return ['path' => null, 'error' => 'Could not save model.'];
+    }
+    return ['path' => $name, 'error' => null];
+}
+
+function upload_model(array $file, string $ext): ?string {
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
+    $result = store_model_upload($file, $ext);
+    if (!$result['path']) {
+        flash((string)$result['error'], 'error');
+        return null;
+    }
+    return $result['path'];
 }
 
 function paginate(int $total, int $perPage, int $page): array {

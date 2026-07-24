@@ -749,6 +749,39 @@ $isSuper = $u['account_type'] === 'super_admin';
     </div>
 
     <div class="panel">
+      <h3>3D source-file conversion</h3>
+      <p class="muted small">Direct GLB/USDZ uploads work without this service. Enable this only after deploying a separate converter worker. Source files stay private, cron sends them to the worker, and a signed callback attaches the converted GLB/USDZ.</p>
+      <div class="check-row">
+        <label class="check"><input type="checkbox" name="sys[model_conversion][enabled]" <?= $chk('model_conversion.enabled') ?>> Enable source-model conversion</label>
+      </div>
+      <div class="form-2col">
+        <label>Converter worker endpoint
+          <input type="url" name="sys[model_conversion][endpoint_url]" value="<?= e($S['model_conversion']['endpoint_url']) ?>" placeholder="https://converter.example.com/jobs">
+          <small class="field-hint">Receives a multipart source file from cron. Use HTTPS in production. This is not the EzihGebeya callback URL.</small>
+        </label>
+        <label>Shared worker secret
+          <input type="password" name="sys[model_conversion][secret]" value="" autocomplete="new-password" placeholder="<?= !empty($S['model_conversion']['secret']) ? 'Saved — leave blank to keep it' : 'Enter a long random secret' ?>">
+          <small class="field-hint">Sent as a Bearer token and used to sign the callback. Leaving this blank keeps the saved secret.</small>
+        </label>
+        <label>Accepted source extensions
+          <input name="sys[model_conversion][formats]" value="<?= e($S['model_conversion']['formats']) ?>">
+          <small class="field-hint">Comma-separated subset of skp, blend, fbx, obj, dae, 3ds, stl, ply, gltf, zip. Use ZIP for OBJ/GLTF files that reference textures or .bin files.</small>
+        </label>
+        <label>Maximum source size (MB)
+          <input type="number" name="sys[model_conversion][max_source_mb]" min="1" max="500" value="<?= (int)$S['model_conversion']['max_source_mb'] ?>">
+          <small class="field-hint">Applies to the private source upload. The final GLB/USDZ still uses the AR model limit above.</small>
+        </label>
+        <label>Dispatch retry limit
+          <input type="number" name="sys[model_conversion][retry_limit]" min="1" max="10" value="<?= (int)$S['model_conversion']['retry_limit'] ?>">
+          <small class="field-hint">How many cron dispatch attempts are allowed before the vendor receives a failure notification.</small>
+        </label>
+      </div>
+      <div class="alert alert-warning" style="margin-top:12px">
+        <strong>SketchUp note:</strong> the worker itself must support <code>.skp</code> (for example through SketchUp's SDK/Desktop exporter). A normal Blender-only worker handles many formats, but not current SketchUp files reliably.
+      </div>
+    </div>
+
+    <div class="panel">
       <h3>🎫 Subscription plans (§26.2)</h3>
       <p class="muted small">Changes apply to new purchases and renewals immediately — businesses mid-term on the old price are unaffected until they renew.</p>
       <div class="table-wrap"><table class="data-table">

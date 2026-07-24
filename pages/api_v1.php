@@ -1077,7 +1077,38 @@ function v1_listing_out(string $type, array $l): array {
                 'url' => img_url($m['file_url']),
             ], rows("SELECT media_type, file_url FROM product_media WHERE product_id = ? AND media_type IN ('model_3d_glb','model_3d_usdz') ORDER BY id", [$l['id']]))
             : [],
+        'model_conversion' => $type === 'product'
+            ? model_conversion_public_out(model_conversion_status_for_product((int)$l['id']))
+            : null,
     ];
+}
+
+// ---------- GET /vendor/software ----------
+if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'software' && $method === 'GET') {
+    if (!software_library_ready()) {
+        api_out(['ok' => true, 'data' => [], 'categories' => [], 'platforms' => []]);
+    }
+    $items = rows(
+        "SELECT * FROM software_items
+         WHERE status = 'published'
+         ORDER BY is_featured DESC, published_at DESC, id DESC"
+    );
+    $categories = [];
+    $platforms = [];
+    foreach ($items as $item) {
+        if (trim((string)$item['category']) !== '') $categories[] = trim($item['category']);
+        foreach (array_filter(array_map('trim', explode(',', (string)$item['platforms']))) as $platform) {
+            $platforms[] = $platform;
+        }
+    }
+    natcasesort($categories);
+    natcasesort($platforms);
+    api_out([
+        'ok' => true,
+        'data' => array_map(fn(array $item): array => software_public_item($item), $items),
+        'categories' => array_values(array_unique($categories)),
+        'platforms' => array_values(array_unique($platforms)),
+    ]);
 }
 
 // ---------- GET /vendor/dashboard ----------
@@ -1893,6 +1924,9 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'listings') {
             'ar_enabled' => feature_enabled('ar'),
             'ar_allowed' => feature_enabled('ar') && current_plan((int)$biz['id']) === 'premium',
             'ar_model_max_mb' => (int)sys('limits.ar_model_max_mb', 10),
+            'model_conversion_enabled' => model_conversion_enabled(),
+            'model_conversion_formats' => model_conversion_allowed_formats(),
+            'model_conversion_max_source_mb' => model_conversion_max_source_mb(),
             'profile_location' => [
                 'city' => trim((string)($biz['city'] ?? '')),
                 'subcity' => trim((string)($biz['subcity'] ?? '')),
@@ -1946,7 +1980,15 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'listings') {
         if (current_plan((int)$biz['id']) !== 'premium') api_error('3D/AR product previews require the Premium plan.', 403);
         if ($method !== 'POST') api_error('Unknown endpoint.', 404);
 
+        $hasSourceModel = ($_FILES['model_source']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+        $hasFinalModel = ($_FILES['model_glb']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE
+            || ($_FILES['model_usdz']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+        if ($hasSourceModel && $hasFinalModel) {
+            api_error('Choose either ready GLB/USDZ files or one source file for conversion, not both.', 422);
+        }
+
         $uploaded = [];
+        $conversion = null;
         foreach (['model_glb' => ['glb', 'model_3d_glb'], 'model_usdz' => ['usdz', 'model_3d_usdz']] as $field => [$ext, $mediaType]) {
             if (($_FILES[$field]['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) continue;
             $path = upload_model($_FILES[$field], $ext);
@@ -1957,8 +1999,24 @@ if ($r0 === 'vendor' && ($apiSeg[1] ?? '') === 'listings') {
             purge_upload_file($old);
             $uploaded[] = $ext;
         }
-        if (!$uploaded) api_error('Select a .glb or .usdz model to upload.', 422);
-        api_out(['ok' => true, 'uploaded' => $uploaded]);
+        if ($uploaded) {
+            cancel_model_conversions_for_product($lid, 'Replaced by a direct GLB/USDZ upload.');
+        }
+        if ($hasSourceModel) {
+            if (!model_conversion_enabled()) {
+                api_error('Source-file conversion is not configured. Export GLB from your 3D application and upload it directly.', 503);
+            }
+            $source = store_model_source_upload($_FILES['model_source']);
+            if (!$source['path']) api_error((string)$source['error'], 422);
+            try {
+                $conversion = model_conversion_public_out(queue_model_conversion($lid, (int)$biz['id'], $source));
+            } catch (Throwable $e) {
+                purge_upload_file($source['path']);
+                api_error($e->getMessage(), 422);
+            }
+        }
+        if (!$uploaded && !$conversion) api_error('Select a GLB, USDZ, or supported source model to upload.', 422);
+        api_out(['ok' => true, 'uploaded' => $uploaded, 'conversion' => $conversion]);
     }
 
     // ---------- product media management ----------

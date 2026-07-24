@@ -64,6 +64,22 @@ describe('vendor api', () => {
     expect(fetchMock.mock.calls[0][1].method).toBe('DELETE');
   });
 
+  it('uploads converted GLB and optional source models as multipart data', async () => {
+    const fetchMock = mockFetch();
+    globalThis.fetch = fetchMock;
+    const glb = new File(['glTF'], 'chair.glb', { type: 'model/gltf-binary' });
+    const source = new File(['SketchUp'], 'chair.skp');
+
+    await vendorApi.uploadModels(12, glb, null, source);
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/vendor/listings/product/12/models');
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    const body = fetchMock.mock.calls[0][1].body as FormData;
+    expect(body.get('model_glb')).toBe(glb);
+    expect(body.get('model_usdz')).toBeNull();
+    expect(body.get('model_source')).toBe(source);
+  });
+
   it('lists vendor inquiries with an optional status filter', async () => {
     const fetchMock = mockFetch({ ok: true, data: [], statuses: ['new'] });
     globalThis.fetch = fetchMock;
@@ -147,6 +163,16 @@ describe('vendor api', () => {
     await vendorApi.analytics();
 
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/vendor/analytics');
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+  });
+
+  it('loads the published software and plugin library through the vendor endpoint', async () => {
+    const fetchMock = mockFetch({ ok: true, data: [], categories: [], platforms: [] });
+    globalThis.fetch = fetchMock;
+
+    await vendorApi.softwareLibrary();
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/vendor/software');
     expect(fetchMock.mock.calls[0][1].method).toBe('GET');
   });
 });

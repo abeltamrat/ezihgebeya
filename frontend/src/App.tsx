@@ -24,6 +24,7 @@ const VendorVerification = lazy(() => import('./pages/VendorVerification').then(
 const VendorReviews = lazy(() => import('./pages/VendorReviews').then((m) => ({ default: m.VendorReviews })));
 const VendorAnalytics = lazy(() => import('./pages/VendorAnalytics').then((m) => ({ default: m.VendorAnalytics })));
 const VendorBoost = lazy(() => import('./pages/VendorBoost').then((m) => ({ default: m.VendorBoost })));
+const VendorSoftware = lazy(() => import('./pages/VendorSoftware').then((m) => ({ default: m.VendorSoftware })));
 const AdminHealth = lazy(() => import('./pages/AdminHealth').then((m) => ({ default: m.AdminHealth })));
 const AdminMonetization = lazy(() => import('./pages/AdminMonetization').then((m) => ({ default: m.AdminMonetization })));
 
@@ -215,6 +216,14 @@ export default function App() {
         element={
           <ProtectedRoute roles={VENDOR_ROLES}>
             <VendorBoost />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/vendor/software"
+        element={
+          <ProtectedRoute roles={VENDOR_ROLES}>
+            <VendorSoftware />
           </ProtectedRoute>
         }
       />

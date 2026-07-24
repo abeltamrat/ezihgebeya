@@ -23,6 +23,7 @@ frontend/dist/
 # Keep app/*.php source files tracked; only ignore the generated frontend shell/assets.
 app/index.html
 app/assets/
+app/licenses/
 app/favicon.svg
 app/icons.svg
 

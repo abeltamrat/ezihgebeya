@@ -17,4 +17,5 @@ $navCurrent = fn(string $p) => ($p === 'vendor' ? $cur === 'vendor' : str_starts
   <a class="<?= $navCurrent('vendor/promotions') ?>" href="<?= url('vendor/promotions') ?>"><span class="dash-ico"><?= system_ui_icon('ads', 'Promotions') ?></span>Promotions</a>
   <a class="<?= $navCurrent('vendor/subscription') ?>" href="<?= url('vendor/subscription') ?>"><span class="dash-ico"><?= system_ui_icon('subscription', 'Subscription') ?></span>Subscription</a>
   <a class="<?= $navCurrent('vendor/analytics') ?>" href="<?= url('vendor/analytics') ?>"><span class="dash-ico"><?= system_ui_icon('analytics', 'Analytics') ?></span>Analytics</a>
+  <a class="<?= $navCurrent('vendor/software') ?>" href="<?= url('app/vendor/software') ?>"><span class="dash-ico"><?= system_ui_icon('services', 'Software and plugins') ?></span>Software and plugins</a>
 </aside>

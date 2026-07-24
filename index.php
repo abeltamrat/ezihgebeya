@@ -25,6 +25,8 @@ require __DIR__ . '/app/helpers.php';
 require __DIR__ . '/app/settings.php';
 require __DIR__ . '/app/remembered_login.php';
 require __DIR__ . '/app/notify.php';
+require __DIR__ . '/app/model_conversion.php';
+require __DIR__ . '/app/software_library.php';
 require __DIR__ . '/app/ads.php';
 require __DIR__ . '/app/attributes.php';
 require __DIR__ . '/app/search_synonyms.php';
@@ -78,7 +80,7 @@ user_location(); // warm session/cookie for this request so every page can read 
 
 // maintenance mode (admin → Settings → General): admins may still log in and work
 if (sys('general.maintenance_mode') && !is_admin(auth())
-    && !in_array($path, ['login', 'logout'], true) && ($seg[0] ?? '') !== 'cron') {
+    && !in_array($path, ['login', 'logout', 'model-conversion/callback'], true) && ($seg[0] ?? '') !== 'cron') {
     http_response_code(503);
     header('Retry-After: 3600');
     $pageTitle = 'Maintenance';
@@ -128,6 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         'vendor/promotions' => 'app/vendor/boost',
         'vendor/subscription' => 'app/vendor/boost',
         'vendor/analytics' => 'app/vendor/analytics',
+        'vendor/software' => 'app/vendor/software',
     ];
     if (isset($reactRedirects[$path])) redirect($reactRedirects[$path]);
     if (($seg[0] ?? '') === 'vendor' && ($seg[1] ?? '') === 'listings') {
@@ -161,6 +164,7 @@ match (true) {
     // location + ads
     $path === 'location' => require $P . 'location.php',
     $seg[0] === 'ads' && ($seg[1] ?? '') === 'go' => call($P, 'ad_click.php', ['id' => (int)($seg[2] ?? 0)]),
+    $path === 'model-conversion/callback' => require $P . 'model_conversion_callback.php',
 
     // cart + checkout + orders
     $path === 'cart'     => require $P . 'cart.php',
@@ -183,6 +187,8 @@ match (true) {
     $seg[0] === 'inquiries' && count($seg) === 2 => call($P, 'inquiry_view.php', ['id' => (int)$seg[1]]),
     $seg[0] === 'download' && count($seg) === 3 && in_array($seg[1], ['verification', 'payment'], true)
         => call($P, 'download.php', ['kind' => $seg[1], 'id' => (int)$seg[2]]),
+    $seg[0] === 'software' && count($seg) === 3 && ($seg[2] ?? '') === 'download'
+        => call($P, 'software_download.php', ['id' => (int)$seg[1]]),
     $path === 'notifications' => require $P . 'notifications.php',
     $path === 'search'        => require $P . 'search.php',
     $seg[0] === 'page' && count($seg) === 2 => call($P, 'page.php', ['slug' => $seg[1]]),

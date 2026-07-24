@@ -4,6 +4,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { vendorApi, type ListingType } from '../api/vendor';
 import { DashLayout } from '../components/DashLayout';
 import { ApiError } from '../api/client';
+import {
+  CLIENT_MODEL_ACCEPT,
+  convertModelFilesToGlb,
+  type ModelConversionProgress,
+} from '../lib/modelConversion';
 
 type FieldValue = string | number | boolean;
 
@@ -29,6 +34,11 @@ export function VendorListingForm() {
   const [imageError, setImageError] = useState('');
   const [glbModel, setGlbModel] = useState<File | null>(null);
   const [usdzModel, setUsdzModel] = useState<File | null>(null);
+  const [sourceModel, setSourceModel] = useState<File | null>(null);
+  const [clientModelFiles, setClientModelFiles] = useState<File[]>([]);
+  const [clientConversionProgress, setClientConversionProgress] = useState<ModelConversionProgress | 'ready' | null>(null);
+  const [isClientConverting, setIsClientConverting] = useState(false);
+  const [modelError, setModelError] = useState('');
 
   useEffect(() => {
     const urls = imageFiles.map((file) => URL.createObjectURL(file));
@@ -74,8 +84,8 @@ export function VendorListingForm() {
       if (imageFiles.length > 0) {
         await vendorApi.uploadImages(ltype, result.data.id, imageFiles);
       }
-      if (ltype === 'product' && (glbModel || usdzModel)) {
-        await vendorApi.uploadModels(result.data.id, glbModel, usdzModel);
+      if (ltype === 'product' && (glbModel || usdzModel || sourceModel)) {
+        await vendorApi.uploadModels(result.data.id, glbModel, usdzModel, sourceModel);
       }
       return result;
     },
@@ -112,6 +122,10 @@ export function VendorListingForm() {
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     setErrors([]);
+    if (isClientConverting) {
+      setErrors(['Wait for the on-device 3D conversion to finish before saving the product.']);
+      return;
+    }
     saveMutation.mutate();
   };
 
@@ -127,10 +141,89 @@ export function VendorListingForm() {
   const subcityOptions = fields.city ? meta?.subcities[String(fields.city)] ?? [] : [];
   const currentImages = itemQuery.data?.data.images ?? [];
   const currentArModels = itemQuery.data?.data.ar_models ?? [];
+  const currentConversion = itemQuery.data?.data.model_conversion ?? null;
   const maxProductImages = Math.max(1, meta?.max_images_per_listing ?? 6);
   const usedProductImages = currentImages.length + imageFiles.length;
   const remainingProductImages = Math.max(0, maxProductImages - usedProductImages);
   const maxImageBytes = Math.max(1, meta?.max_image_upload_mb ?? 30) * 1024 * 1024;
+  const clientModelMaxMb = Math.min(Math.max(1, meta?.model_conversion_max_source_mb ?? 100), 100);
+  const sourceModelAccept = (meta?.model_conversion_formats ?? []).map((format) => `.${format}`).join(',');
+
+  const selectFinalModel = (file: File | undefined, kind: 'glb' | 'usdz') => {
+    setModelError('');
+    if (!file) {
+      if (kind === 'glb') setGlbModel(null);
+      else setUsdzModel(null);
+      return;
+    }
+    const maxBytes = Math.max(1, meta?.ar_model_max_mb ?? 10) * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setModelError(`${file.name} exceeds the ${meta?.ar_model_max_mb ?? 10} MB final-model limit.`);
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(`.${kind}`)) {
+      setModelError(`Choose a valid .${kind} file.`);
+      return;
+    }
+    setSourceModel(null);
+    setClientModelFiles([]);
+    setClientConversionProgress(null);
+    if (kind === 'glb') setGlbModel(file);
+    else setUsdzModel(file);
+  };
+
+  const selectSourceModel = (file: File | undefined) => {
+    setModelError('');
+    if (!file) {
+      setSourceModel(null);
+      return;
+    }
+    const extension = file.name.toLowerCase().split('.').pop() ?? '';
+    if (!(meta?.model_conversion_formats ?? []).includes(extension)) {
+      setModelError(`.${extension || 'unknown'} cannot be converted. Choose ${meta?.model_conversion_formats.join(', ')}.`);
+      return;
+    }
+    const maxBytes = Math.max(1, meta?.model_conversion_max_source_mb ?? 100) * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setModelError(`${file.name} exceeds the ${meta?.model_conversion_max_source_mb ?? 100} MB source-model limit.`);
+      return;
+    }
+    setGlbModel(null);
+    setUsdzModel(null);
+    setClientModelFiles([]);
+    setClientConversionProgress(null);
+    setSourceModel(file);
+  };
+
+  const selectClientModelFiles = async (selected: FileList | null) => {
+    if (!selected) return;
+    const files = Array.from(selected);
+    setModelError('');
+    setClientModelFiles(files);
+    setClientConversionProgress(null);
+    setIsClientConverting(true);
+    setSourceModel(null);
+    setGlbModel(null);
+
+    try {
+      const maxSourceBytes = clientModelMaxMb * 1024 * 1024;
+      const maxOutputBytes = Math.max(1, meta?.ar_model_max_mb ?? 10) * 1024 * 1024;
+      const converted = await convertModelFilesToGlb(
+        files,
+        maxSourceBytes,
+        maxOutputBytes,
+        setClientConversionProgress,
+      );
+      setGlbModel(converted);
+      setClientConversionProgress('ready');
+    } catch (error) {
+      setGlbModel(null);
+      setClientConversionProgress(null);
+      setModelError(error instanceof Error ? error.message : 'The model could not be converted on this device.');
+    } finally {
+      setIsClientConverting(false);
+    }
+  };
 
   const addProductImages = (selected: FileList | null) => {
     if (!selected) return;
@@ -445,8 +538,9 @@ export function VendorListingForm() {
                         <span><strong>GLB model</strong><small>Android + web · maximum {meta.ar_model_max_mb} MB</small></span>
                         <input
                           type="file"
+                          disabled={isClientConverting}
                           accept=".glb,model/gltf-binary"
-                          onChange={(event) => setGlbModel(event.target.files?.[0] ?? null)}
+                          onChange={(event) => selectFinalModel(event.target.files?.[0], 'glb')}
                         />
                         <span className="ar-file-name">{glbModel?.name ?? (currentArModels.some((model) => model.type === 'glb') ? 'Current GLB attached · choose to replace' : 'Choose .glb')}</span>
                       </label>
@@ -454,13 +548,116 @@ export function VendorListingForm() {
                         <span><strong>USDZ model</strong><small>iPhone + iPad · maximum {meta.ar_model_max_mb} MB</small></span>
                         <input
                           type="file"
+                          disabled={isClientConverting}
                           accept=".usdz,model/vnd.usdz+zip"
-                          onChange={(event) => setUsdzModel(event.target.files?.[0] ?? null)}
+                          onChange={(event) => selectFinalModel(event.target.files?.[0], 'usdz')}
                         />
                         <span className="ar-file-name">{usdzModel?.name ?? (currentArModels.some((model) => model.type === 'usdz') ? 'Current USDZ attached · choose to replace' : 'Choose .usdz')}</span>
                       </label>
                     </div>
-                    <p className="ar-model-help">You may upload only GLB, but adding both formats gives customers the widest device support. Files are validated after saving the product.</p>
+                    <p className="ar-model-help">Ready-to-view files are attached immediately after the product is saved. GLB is the required web format; USDZ adds the best Apple Quick Look experience.</p>
+
+                    <div className="model-conversion-divider"><span>or convert free on this device</span></div>
+                    <div className="client-model-converter">
+                      <div className="client-model-converter-head">
+                        <div>
+                          <strong>Open-source model converter</strong>
+                          <p>FBX, OBJ, DAE, 3DS, STL, PLY, or glTF. Select companion MTL, BIN, and texture files at the same time.</p>
+                        </div>
+                        <span className="badge badge-status-active">Free</span>
+                      </div>
+                      <label className={`model-source-file ${clientModelFiles.length > 0 ? 'has-file' : ''} ${isClientConverting ? 'is-busy' : ''}`}>
+                        <span className="model-source-icon" aria-hidden="true">{isClientConverting ? '···' : '3D'}</span>
+                        <span className="model-source-copy">
+                          <strong>
+                            {clientModelFiles.length > 0
+                              ? `${clientModelFiles[0].name}${clientModelFiles.length > 1 ? ` + ${clientModelFiles.length - 1} companion file${clientModelFiles.length === 2 ? '' : 's'}` : ''}`
+                              : 'Choose model and companion files'}
+                          </strong>
+                          <small>
+                            {clientConversionProgress === 'loading'
+                              ? 'Loading the open-source converter…'
+                              : clientConversionProgress === 'reading'
+                                ? 'Reading selected files…'
+                                : clientConversionProgress === 'converting'
+                                  ? 'Converting geometry and materials to GLB…'
+                                  : clientConversionProgress === 'validating'
+                                    ? 'Checking the converted GLB…'
+                                    : clientConversionProgress === 'ready' && glbModel
+                                      ? `${(glbModel.size / (1024 * 1024)).toFixed(1)} MB GLB ready to upload when you save`
+                                      : `Conversion happens locally in your browser · maximum ${clientModelMaxMb} MB source`}
+                          </small>
+                        </span>
+                        <span className="btn btn-outline btn-sm">{clientModelFiles.length > 0 ? 'Choose again' : 'Choose files'}</span>
+                        <input
+                          type="file"
+                          multiple
+                          disabled={isClientConverting}
+                          accept={CLIENT_MODEL_ACCEPT}
+                          onChange={(event) => {
+                            const selected = event.target.files;
+                            void selectClientModelFiles(selected);
+                            event.target.value = '';
+                          }}
+                        />
+                      </label>
+                      <p className="ar-model-help">
+                        Powered by the open-source <a href="https://github.com/kovacsv/assimpjs" target="_blank" rel="noreferrer">AssimpJS project ↗</a>. Source files stay on this device; only the finished GLB is uploaded when you save the product.
+                      </p>
+                    </div>
+
+                    <div className="model-conversion-divider"><span>SketchUp or server conversion</span></div>
+                    {meta.model_conversion_enabled ? (
+                      <>
+                        <label className={`model-source-file ${sourceModel ? 'has-file' : ''}`}>
+                          <span className="model-source-icon" aria-hidden="true">3D</span>
+                          <span className="model-source-copy">
+                            <strong>{sourceModel ? sourceModel.name : 'Upload SketchUp or another 3D source'}</strong>
+                            <small>
+                              {sourceModel
+                                ? `${(sourceModel.size / (1024 * 1024)).toFixed(1)} MB · queued after the product is saved`
+                                : `SKP, ${meta.model_conversion_formats.filter((format) => format !== 'skp').map((format) => format.toUpperCase()).join(', ')} · maximum ${meta.model_conversion_max_source_mb} MB`}
+                            </small>
+                          </span>
+                          <span className="btn btn-outline btn-sm">{sourceModel ? 'Change file' : 'Choose file'}</span>
+                          <input
+                            type="file"
+                            disabled={isClientConverting}
+                            accept={sourceModelAccept}
+                            onChange={(event) => selectSourceModel(event.target.files?.[0])}
+                          />
+                        </label>
+                        <p className="ar-model-help">For OBJ or glTF with separate textures, material files, or .bin files, put the model and all dependencies in one ZIP. Conversion runs in the background and you will receive a notification when it finishes.</p>
+                      </>
+                    ) : (
+                      <div className="model-conversion-unavailable">
+                        <strong>Have a SketchUp file?</strong>
+                        <p>
+                          Open-source Assimp does not read SKP files. In current SketchUp choose File → Export → 3D Model → GLTF Binary (.glb), then upload the GLB above.
+                          {' '}<a href="https://help.sketchup.com/en/sketchup/working-gltf-files" target="_blank" rel="noreferrer">View SketchUp export help ↗</a>
+                        </p>
+                      </div>
+                    )}
+                    {currentConversion && (
+                      <div className={`model-conversion-status is-${currentConversion.status}`} role="status">
+                        <span className="model-conversion-status-dot" aria-hidden="true" />
+                        <div>
+                          <strong>
+                            {currentConversion.status === 'completed'
+                              ? 'Conversion completed'
+                              : currentConversion.status === 'failed'
+                                ? 'Conversion failed'
+                                : currentConversion.status === 'processing'
+                                  ? 'Conversion in progress'
+                                  : currentConversion.status === 'cancelled'
+                                    ? 'Conversion replaced'
+                                    : 'Waiting for converter'}
+                          </strong>
+                          <p>{currentConversion.source_name}{currentConversion.error ? ` · ${currentConversion.error}` : ''}</p>
+                        </div>
+                      </div>
+                    )}
+                    {modelError && <p className="image-upload-error" role="alert">{modelError}</p>}
                   </>
                 ) : (
                   <div className="ar-upgrade-note">
@@ -543,9 +740,9 @@ export function VendorListingForm() {
           <button
             className="btn btn-primary"
             type="submit"
-            disabled={saveMutation.isPending || (ltype === 'product' && !meta?.profile_location.city)}
+            disabled={saveMutation.isPending || isClientConverting || (ltype === 'product' && !meta?.profile_location.city)}
           >
-            {saveMutation.isPending ? 'Saving…' : listingId ? 'Save changes' : 'Create listing'}
+            {isClientConverting ? 'Converting 3D model…' : saveMutation.isPending ? 'Saving…' : listingId ? 'Save changes' : 'Create listing'}
           </button>
         </div>
       </form>

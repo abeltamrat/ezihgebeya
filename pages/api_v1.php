@@ -983,8 +983,8 @@ if ($r0 === 'admin') {
             WHERE status = 'confirmed' AND created_at > NOW() - INTERVAL 30 DAY") ?: [];
 
         api_out(['ok' => true,
-            'top_pin_packages' => TOP_PIN_PACKAGES,
-            'boost_tiers' => BOOST_TIERS,
+            'top_pin_packages' => top_pin_packages(),
+            'boost_tiers' => boost_tiers(),
             'top_pin_stats' => [
                 'total' => (int)($topPinStats['total'] ?? 0),
                 'pending' => (int)($topPinStats['pending'] ?? 0),

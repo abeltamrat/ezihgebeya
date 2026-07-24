@@ -8,6 +8,27 @@
  * return the pricing tables with admin overrides applied.
  */
 
+/** Compatibility defaults for production config.php files preserved across FTP deploys. */
+function top_pin_package_defaults(): array {
+    if (defined('TOP_PIN_PACKAGES')) return (array)constant('TOP_PIN_PACKAGES');
+    return [
+        'top_pin_7' => ['label' => 'TOP Pin — 7 days', 'price' => 150, 'duration_days' => 7],
+        'top_pin_30' => ['label' => 'TOP Pin — 30 days', 'price' => 450, 'duration_days' => 30],
+    ];
+}
+
+function boost_tier_defaults(): array {
+    if (defined('BOOST_TIERS')) return (array)constant('BOOST_TIERS');
+    return [
+        'boost_basic' => ['label' => 'Boost Basic', 'price' => 500, 'rank_weight' => 1,
+            'benefits' => ['Light ranking lift for all your listings', 'More similar-listing exposure', 'Basic analytics']],
+        'boost_pro' => ['label' => 'Boost Pro', 'price' => 1000, 'rank_weight' => 2,
+            'benefits' => ['Stronger ranking lift for all your listings', 'Auto-refreshed listing freshness', 'Full analytics']],
+        'boost_max' => ['label' => 'Boost Max', 'price' => 2000, 'rank_weight' => 3,
+            'benefits' => ['Highest ranking lift for all your listings', 'Priority similar-listing placement', 'Full analytics', 'Sales callback support']],
+    ];
+}
+
 function system_settings_defaults(): array {
     return [
         'general' => [
@@ -156,7 +177,7 @@ function promo_types(): array {
 
 /** TOP_PIN_PACKAGES with admin price overrides (labels/durations stay from config). */
 function top_pin_packages(): array {
-    $out = TOP_PIN_PACKAGES;
+    $out = top_pin_package_defaults();
     foreach ((array)sys('top_pin', []) as $k => $p) {
         if (isset($out[$k])) $out[$k]['price'] = max(0, (float)($p['price'] ?? $out[$k]['price']));
     }
@@ -165,7 +186,7 @@ function top_pin_packages(): array {
 
 /** BOOST_TIERS with admin price overrides (labels/benefits stay from config). */
 function boost_tiers(): array {
-    $out = BOOST_TIERS;
+    $out = boost_tier_defaults();
     foreach ((array)sys('boost', []) as $k => $p) {
         if (isset($out[$k])) $out[$k]['price'] = max(0, (float)($p['price'] ?? $out[$k]['price']));
     }
